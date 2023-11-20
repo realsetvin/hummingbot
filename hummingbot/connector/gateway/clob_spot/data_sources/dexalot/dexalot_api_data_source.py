@@ -7,10 +7,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import pandas as pd
 
 from hummingbot.client.config.config_helpers import ClientConfigAdapter
-from hummingbot.connector.gateway.clob_spot.data_sources.clob_api_data_source_base import (
-    CancelOrderResult,
-    PlaceOrderResult,
-)
 from hummingbot.connector.gateway.clob_spot.data_sources.dexalot import dexalot_constants as CONSTANTS
 from hummingbot.connector.gateway.clob_spot.data_sources.dexalot.dexalot_auth import DexalotAuth, WalletSigner
 from hummingbot.connector.gateway.clob_spot.data_sources.dexalot.dexalot_constants import (
@@ -23,6 +19,7 @@ from hummingbot.connector.gateway.clob_spot.data_sources.dexalot.dexalot_web_uti
 from hummingbot.connector.gateway.clob_spot.data_sources.gateway_clob_api_data_source_base import (
     GatewayCLOBAPIDataSourceBase,
 )
+from hummingbot.connector.gateway.common_types import CancelOrderResult, PlaceOrderResult
 from hummingbot.connector.gateway.gateway_in_flight_order import GatewayInFlightOrder
 from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.connector.utils import combine_to_hb_trading_pair, get_new_numeric_client_order_id
@@ -67,10 +64,6 @@ class DexalotAPIDataSource(GatewayCLOBAPIDataSourceBase):
     def events_are_streamed(self) -> bool:
         return False
 
-    @property
-    def current_block_time(self) -> float:
-        return CONSTANTS.CURRENT_BLOCK_TIME
-
     async def start(self):
         signer = WalletSigner(
             chain=self._chain,
@@ -99,6 +92,10 @@ class DexalotAPIDataSource(GatewayCLOBAPIDataSourceBase):
         result = place_order_results[0]
         if result.exception is not None:
             raise result.exception
+        self.logger().debug(
+            f"Order creation transaction hash for {order.client_order_id}:"
+            f" {result.misc_updates['creation_transaction_hash']}"
+        )
         return result.exchange_order_id, result.misc_updates
 
     async def batch_order_create(self, orders_to_create: List[GatewayInFlightOrder]) -> List[PlaceOrderResult]:
@@ -110,10 +107,20 @@ class DexalotAPIDataSource(GatewayCLOBAPIDataSourceBase):
             for i in range(0, len(orders_to_create), CONSTANTS.MAX_ORDER_CREATIONS_PER_BATCH)
         ]
         results = await safe_gather(*tasks)
-        return list(chain(*results))
+        flattened_results = list(chain(*results))
+        self.logger().debug(
+            f"Order creation transaction hashes for {', '.join([o.client_order_id for o in orders_to_create])}"
+        )
+        for result in flattened_results:
+            self.logger().debug(f"Transaction hash: {result.misc_updates['creation_transaction_hash']}")
+        return flattened_results
 
     async def cancel_order(self, order: GatewayInFlightOrder) -> Tuple[bool, Optional[Dict[str, Any]]]:
         cancel_order_results = await super().batch_order_cancel(orders_to_cancel=[order])
+        self.logger().debug(
+            f"cancel order transaction hash for {order.client_order_id}:"
+            f" {cancel_order_results[0].misc_updates['cancelation_transaction_hash']}"
+        )
         misc_updates = {}
         canceled = False
         if len(cancel_order_results) != 0:
@@ -133,7 +140,13 @@ class DexalotAPIDataSource(GatewayCLOBAPIDataSourceBase):
             for i in range(0, len(orders_to_cancel), CONSTANTS.MAX_ORDER_CANCELATIONS_PER_BATCH)
         ]
         results = await safe_gather(*tasks)
-        return list(chain(*results))
+        flattened_results = list(chain(*results))
+        self.logger().debug(
+            f"Order cancelation transaction hashes for {', '.join([o.client_order_id for o in orders_to_cancel])}"
+        )
+        for result in flattened_results:
+            self.logger().debug(f"Transaction hash: {result.misc_updates['cancelation_transaction_hash']}")
+        return flattened_results
 
     def get_client_order_id(
         self, is_buy: bool, trading_pair: str, hbot_order_id_prefix: str, max_id_len: Optional[int]
@@ -174,8 +187,9 @@ class DexalotAPIDataSource(GatewayCLOBAPIDataSourceBase):
 
         if in_flight_order.exchange_order_id is None:
             status_update = await self._get_order_status_update_from_transaction_status(in_flight_order=in_flight_order)
-            in_flight_order.exchange_order_id = status_update.exchange_order_id
-            self._publisher.trigger_event(event_tag=MarketEvent.OrderUpdate, message=status_update)
+            if status_update is not None:
+                in_flight_order.exchange_order_id = status_update.exchange_order_id
+                self._publisher.trigger_event(event_tag=MarketEvent.OrderUpdate, message=status_update)
 
         if (
             in_flight_order.exchange_order_id is not None
@@ -188,7 +202,7 @@ class DexalotAPIDataSource(GatewayCLOBAPIDataSourceBase):
             self._publisher.trigger_event(event_tag=MarketEvent.OrderUpdate, message=status_update)
 
         if status_update is None:
-            raise ValueError(f"No update found for order {in_flight_order.exchange_order_id}.")
+            raise ValueError(f"No update found for order {in_flight_order.client_order_id}.")
 
         return status_update
 
@@ -413,7 +427,7 @@ class DexalotAPIDataSource(GatewayCLOBAPIDataSourceBase):
                 or transaction_data.get("txReceipt", {}).get("status") == 0
             )
         ):
-            raise ValueError(f"Transaction {in_flight_order.creation_transaction_hash} not found.")
+            order_update = None  # transaction data not found
         else:  # transaction is still being processed
             order_update = OrderUpdate(
                 trading_pair=in_flight_order.trading_pair,
@@ -480,10 +494,10 @@ class DexalotAPIDataSource(GatewayCLOBAPIDataSourceBase):
         quote_scaler = Decimal(f"1e-{market_info['quoteDecimals']}")
         return TradingRule(
             trading_pair=combine_to_hb_trading_pair(base=base, quote=quote),
-            min_order_size=Decimal(f"1e-{market_info['quoteDisplayDecimals']}"),
-            min_price_increment=Decimal(f"1e-{market_info['baseDisplayDecimals']}"),
-            min_quote_amount_increment=Decimal(f"1e-{market_info['baseDisplayDecimals']}"),
-            min_base_amount_increment=Decimal(f"1e-{market_info['quoteDisplayDecimals']}"),
+            min_order_size=Decimal(f"1e-{market_info['baseDisplayDecimals']}"),
+            min_price_increment=Decimal(f"1e-{market_info['quoteDisplayDecimals']}"),
+            min_quote_amount_increment=Decimal(f"1e-{market_info['quoteDisplayDecimals']}"),
+            min_base_amount_increment=Decimal(f"1e-{market_info['baseDisplayDecimals']}"),
             min_notional_size=Decimal(market_info["minTradeAmount"]) * quote_scaler,
             min_order_value=Decimal(market_info["minTradeAmount"]) * quote_scaler,
         )
@@ -581,13 +595,15 @@ class DexalotAPIDataSource(GatewayCLOBAPIDataSourceBase):
                 await self._sleep(1.0)
 
     async def _connected_websocket_assistant(self) -> WSAssistant:
-        auth_response = await self._api_get(
-            path_url=CONSTANTS.WS_AUTH_PATH,
-            throttler_limit_id=CONSTANTS.WS_AUTH_RATE_LIMIT_ID,
-            is_auth_required=True,
-        )
-        token = auth_response["token"]
-        ws_url = f"{CONSTANTS.WS_PATH_URL[self._network]}?wstoken={token}"
+        ws_url = CONSTANTS.WS_PATH_URL[self._network]
+        if self._api_key is not None and len(self._api_key) > 0:
+            auth_response = await self._api_get(
+                path_url=CONSTANTS.WS_AUTH_PATH,
+                throttler_limit_id=CONSTANTS.WS_AUTH_RATE_LIMIT_ID,
+                is_auth_required=True,
+            )
+            token = auth_response["token"]
+            ws_url = f"{CONSTANTS.WS_PATH_URL[self._network]}?wstoken={token}"
         ws: WSAssistant = await self._api_factory.get_ws_assistant()
         await ws.connect(ws_url=ws_url, ping_timeout=CONSTANTS.HEARTBEAT_TIME_INTERVAL)
         return ws

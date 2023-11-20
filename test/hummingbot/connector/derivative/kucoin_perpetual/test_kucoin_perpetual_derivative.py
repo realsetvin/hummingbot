@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from copy import deepcopy
 from decimal import Decimal
 from typing import Any, Callable, List, Optional, Tuple
 from unittest.mock import AsyncMock, patch
@@ -14,13 +15,14 @@ import hummingbot.connector.derivative.kucoin_perpetual.kucoin_perpetual_web_uti
 from hummingbot.client.config.client_config_map import ClientConfigMap
 from hummingbot.client.config.config_helpers import ClientConfigAdapter
 from hummingbot.connector.derivative.kucoin_perpetual.kucoin_perpetual_derivative import KucoinPerpetualDerivative
+from hummingbot.connector.derivative.position import Position
 from hummingbot.connector.test_support.perpetual_derivative_test import AbstractPerpetualDerivativeTests
 from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.connector.utils import combine_to_hb_trading_pair
-from hummingbot.core.data_type.common import OrderType, PositionAction, PositionMode, TradeType
+from hummingbot.core.data_type.common import OrderType, PositionAction, PositionMode, PositionSide, TradeType
 from hummingbot.core.data_type.funding_info import FundingInfo
 from hummingbot.core.data_type.in_flight_order import InFlightOrder
-from hummingbot.core.data_type.trade_fee import DeductedFromReturnsTradeFee, TokenAmount, TradeFeeBase
+from hummingbot.core.data_type.trade_fee import AddedToCostTradeFee, TokenAmount, TradeFeeBase
 
 
 class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualDerivativeTests):
@@ -519,7 +521,7 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
 
     @property
     def expected_supported_order_types(self):
-        return [OrderType.LIMIT, OrderType.MARKET]
+        return [OrderType.LIMIT, OrderType.MARKET, OrderType.LIMIT_MAKER]
 
     @property
     def expected_trading_rule(self):
@@ -564,9 +566,17 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
 
     @property
     def expected_fill_fee(self) -> TradeFeeBase:
-        return DeductedFromReturnsTradeFee(
+        return AddedToCostTradeFee(
+            percent=Decimal('0.0002'),
             percent_token=self.quote_asset,
-            flat_fees=[TokenAmount(token=self.quote_asset, amount=Decimal("0.1"))],
+        )
+
+    @property
+    def expected_trade_history_fill_fee(self) -> TradeFeeBase:
+        return AddedToCostTradeFee(
+            percent=Decimal('0'),
+            percent_token=self.quote_asset,
+            flat_fees=[TokenAmount(amount=Decimal('0.0002'), token=self.quote_asset)]
         )
 
     @property
@@ -607,9 +617,7 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
         self.assertEqual(self.exchange_trading_pair, request_data["symbol"])
         self.assertEqual(order.amount, request_data["size"] * 1e-6)
         self.assertEqual(CONSTANTS.DEFAULT_TIME_IN_FORCE, request_data["timeInForce"])
-        self.assertEqual(order.position == PositionAction.CLOSE, request_data["closeOrder"])
         self.assertEqual(order.client_order_id, request_data["clientOid"])
-        self.assertEqual(order.position == PositionAction.CLOSE, request_data["reduceOnly"])
         self.assertIn("clientOid", request_data)
         self.assertEqual(order.order_type.name.lower(), request_data["type"])
 
@@ -769,6 +777,19 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
         mock_api.get(url, body=json.dumps(response), callback=callback)
         return url
 
+    def configure_fill_history_trade_response(
+        self,
+        order: InFlightOrder,
+        mock_api: aioresponses,
+        callback: Optional[Callable] = lambda *args, **kwargs: None,
+    ) -> str:
+        url = web_utils.get_rest_url_for_endpoint(
+            endpoint=CONSTANTS.GET_RECENT_FILLS_INFO_PATH_URL,
+        )
+        response = self._order_fills_request_full_fill_mock_response(order=order)
+        mock_api.get(url, body=json.dumps(response), callback=callback)
+        return url
+
     def configure_erroneous_http_fill_trade_response(
         self,
         order: InFlightOrder,
@@ -916,24 +937,24 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
             "topic": "/contractMarket/tradeOrders",
             "subject": "orderChange",
             "channelType": "private",
-            "data": [{
+            "data": {
                 "orderId": order.exchange_order_id or "1640b725-75e9-407d-bea9-aae4fc666d33",
                 "symbol": self.exchange_trading_pair,
                 "type": "filled",
                 "status": "done",
                 "orderType": order.order_type.name.lower(),
                 "side": order.trade_type.name.lower(),
-                "price": str(order.price),
+                "matchPrice": str(order.price),
                 "size": float(order.amount) * 1000,
                 "remainSize": "0",
-                "filledSize": float(order.amount) * 1000,
-                "fee": str(self.expected_fill_fee.flat_fees[0].amount),
+                "matchSize": float(order.amount) * 1000,
+                "fee": str(self.expected_fill_fee.percent),
                 "canceledSize": "0",
                 "clientOid": order.client_order_id or "",
                 "orderTime": 1545914149935808589,
                 "liquidity": "maker",
                 "ts": 1545914149935808589
-            }]
+            }
         }
 
     def trade_event_for_full_fill_websocket_update(self, order: InFlightOrder):
@@ -942,24 +963,25 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
             "topic": "/contractMarket/tradeOrders",
             "subject": "orderChange",
             "channelType": "private",
-            "data": [{
+            "data": {
                 "orderId": order.exchange_order_id or "1640b725-75e9-407d-bea9-aae4fc666d33",
+                "tradeId": self.expected_fill_trade_id,
                 "symbol": self.exchange_trading_pair,
-                "type": "filled",
+                "type": "match",
                 "status": "done",
                 "orderType": order.order_type.name.lower(),
                 "side": order.trade_type.name.lower(),
-                "price": str(order.price),
+                "matchPrice": str(order.price),
                 "size": float(order.amount) * 1000,
-                "fee": str(self.expected_fill_fee.flat_fees[0].amount),
+                "fee": str(self.expected_fill_fee.percent),
                 "remainSize": "0",
-                "filledSize": float(order.amount) * 1000,
+                "matchSize": float(order.amount) * 1000000,
                 "canceledSize": "0",
                 "clientOid": order.client_order_id or "",
                 "orderTime": 1545914149935808589,
                 "liquidity": "maker",
                 "ts": 1545914149935808589
-            }]
+            }
         }
 
     def position_event_for_full_fill_websocket_update(self, order: InFlightOrder, unrealized_pnl: float):
@@ -997,7 +1019,7 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
                 "changeReason": "positionChange",
                 "currentCost": str(position_value),
                 "openingTimestamp": 1558433191000,
-                "currentQty": -float(order.amount),
+                "currentQty": -int(order.amount),
                 "delevPercentage": 0.52,
                 "currentComm": 0.00000271,
                 "realisedGrossCost": 0E-8,
@@ -1132,6 +1154,36 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
         error_code_str = self.exchange._format_ret_code_for_print(ret_code=CONSTANTS.RET_CODE_ORDER_NOT_EXISTS)
         exception = IOError(f"{error_code_str} - Failed to cancel order because it was not found.")
         self.assertFalse(self.exchange._is_request_exception_related_to_time_synchronizer(exception))
+
+    def place_buy_limit_maker_order(
+        self,
+        amount: Decimal = Decimal("100"),
+        price: Decimal = Decimal("10_000"),
+        position_action: PositionAction = PositionAction.OPEN,
+    ):
+        order_id = self.exchange.buy(
+            trading_pair=self.trading_pair,
+            amount=amount,
+            order_type=OrderType.LIMIT_MAKER,
+            price=price,
+            position_action=position_action,
+        )
+        return order_id
+
+    def place_buy_market_order(
+        self,
+        amount: Decimal = Decimal("100"),
+        price: Decimal = Decimal("10_000"),
+        position_action: PositionAction = PositionAction.OPEN,
+    ):
+        order_id = self.exchange.buy(
+            trading_pair=self.trading_pair,
+            amount=amount,
+            order_type=OrderType.MARKET,
+            price=price,
+            position_action=position_action,
+        )
+        return order_id
 
     @aioresponses()
     @patch("asyncio.Queue.get")
@@ -1283,7 +1335,7 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
                         "fixFee": "0.00000006",  # Fixed fees
                         "feeCurrency": "XBT",  # Charging currency
                         "stop": "",  # A mark to the stop order type
-                        "fee": str(self.expected_fill_fee.flat_fees[0].amount),  # Transaction fee
+                        "fee": str(self.expected_fill_fee.percent),  # Transaction fee
                         "orderType": order.order_type.name.lower(),  # Order type
                         "tradeType": "trade",  # Trade type (trade, liquidation, ADL or settlement)
                         "createdAt": 1558334496000,  # Time the order created
@@ -1294,6 +1346,7 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
         }
 
     def _order_fills_request_full_fill_mock_response(self, order: InFlightOrder):
+        self._simulate_trading_rules_initialized()
         return {
             "code": "200000",
             "data": {
@@ -1310,19 +1363,22 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
                             "liquidity": "taker",  # Liquidity- taker or maker
                             "forceTaker": True,  # Whether to force processing as a taker
                             "price": str(order.price),  # Filled price
-                            "size": float(order.amount),   # Order amount
+                            "matchPrice": str(order.price),  # Filled price
+                            "size": float(self.exchange.get_quantity_of_contracts(self.trading_pair, order.amount)),   # Order amount
                             "filledSize": float(order.amount),   # Filled amount
+                            "matchSize": float(order.amount),   # Filled amount
                             "value": "0.001204529",  # Order value
                             "feeRate": "0.0005",  # Floating fees
                             "fixFee": "0.00000006",  # Fixed fees
-                            "feeCurrency": "XBT",  # Charging currency
+                            "feeCurrency": "USDT",  # Charging currency
                             "stop": "",  # A mark to the stop order type
-                            "fee": str(self.expected_fill_fee.flat_fees[0].amount),  # Transaction fee
+                            "fee": str(self.expected_fill_fee.percent),  # Transaction fee
                             "orderType": order.order_type.name.lower(),  # Order type
                             "tradeType": "trade",  # Trade type (trade, liquidation, ADL or settlement)
                             "createdAt": 1558334496000,  # Time the order created
                             "settleCurrency": order.base_asset,  # settlement currency
-                            "tradeTime": 1558334496000000000  # trade time in nanosecond
+                            "tradeTime": 1558334496000000000,  # trade time in nanosecond
+                            "ts": 1558334496000000000  # trade time in nanosecond
                         }
                     ]
             }
@@ -1395,3 +1451,263 @@ class KucoinPerpetualDerivativeTests(AbstractPerpetualDerivativeTests.PerpetualD
         # Disabling this test because the connector has not been updated yet to validate
         # order not found during status update (check _is_order_not_found_during_status_update_error)
         pass
+
+    @aioresponses()
+    def test_create_buy_limit_maker_order_successfully(self, mock_api):
+        self._simulate_trading_rules_initialized()
+        request_sent_event = asyncio.Event()
+        self.exchange._set_current_timestamp(1640780000)
+
+        url = self.order_creation_url
+
+        creation_response = self.order_creation_request_successful_mock_response
+
+        mock_api.post(url,
+                      body=json.dumps(creation_response),
+                      callback=lambda *args, **kwargs: request_sent_event.set())
+
+        order_id = self.place_buy_limit_maker_order()
+        self.async_run_with_timeout(request_sent_event.wait())
+
+        order_request = self._all_executed_requests(mock_api, url)[0]
+        self.validate_auth_credentials_present(order_request)
+        self.assertIn(order_id, self.exchange.in_flight_orders)
+        request_data = json.loads(order_request.kwargs["data"])
+        self.assertEqual(True, request_data["postOnly"])
+
+    @aioresponses()
+    @patch("hummingbot.connector.derivative.kucoin_perpetual.kucoin_perpetual_derivative.KucoinPerpetualDerivative.get_price")
+    def test_create_buy_market_order_successfully(self, mock_api, get_price_mock):
+        get_price_mock.return_value = Decimal(10000)
+        self._simulate_trading_rules_initialized()
+        request_sent_event = asyncio.Event()
+        self.exchange._set_current_timestamp(1640780000)
+
+        url = self.order_creation_url
+
+        creation_response = self.order_creation_request_successful_mock_response
+
+        mock_api.post(url,
+                      body=json.dumps(creation_response),
+                      callback=lambda *args, **kwargs: request_sent_event.set())
+
+        order_id = self.place_buy_market_order()
+        self.async_run_with_timeout(request_sent_event.wait())
+
+        order_request = self._all_executed_requests(mock_api, url)[0]
+        self.validate_auth_credentials_present(order_request)
+        self.assertIn(order_id, self.exchange.in_flight_orders)
+        request_data = json.loads(order_request.kwargs["data"])
+        self.assertEqual("IOC", request_data["timeInForce"])
+
+    @aioresponses()
+    def test_update_order_status_processes_trade_fill(self, mock_api):
+        self.exchange._set_current_timestamp(1640780000)
+        self._simulate_trading_rules_initialized()
+        request_sent_event = asyncio.Event()
+
+        self.exchange.start_tracking_order(
+            order_id="OID1",
+            exchange_order_id="EOID1",
+            trading_pair=self.trading_pair,
+            order_type=OrderType.LIMIT,
+            trade_type=TradeType.BUY,
+            price=Decimal("10000"),
+            amount=Decimal("1"),
+        )
+        order: InFlightOrder = self.exchange.in_flight_orders["OID1"]
+
+        self.configure_fill_history_trade_response(
+            order=order,
+            mock_api=mock_api,
+            callback=lambda *args, **kwargs: request_sent_event.set())
+        self.async_run_with_timeout(self.exchange._update_trade_history())
+
+        self.async_run_with_timeout(request_sent_event.wait())
+        fill_event = self.order_filled_logger.event_log[0]
+
+        self.assertEqual(1, len(self.order_filled_logger.event_log))
+        self.assertEqual(self.exchange.current_timestamp, fill_event.timestamp)
+        self.assertEqual(order.client_order_id, fill_event.order_id)
+        self.assertEqual(order.trading_pair, fill_event.trading_pair)
+        self.assertEqual(order.trade_type, fill_event.trade_type)
+        self.assertEqual(order.order_type, fill_event.order_type)
+        self.assertEqual(order.price, fill_event.price)
+        self.assertEqual(order.amount, fill_event.amount)
+        expected_fee = self.expected_trade_history_fill_fee
+        self.assertEqual(expected_fee, fill_event.trade_fee)
+
+    @aioresponses()
+    def test_start_network_update_trading_rules(self, mock_api):
+        self.exchange._set_current_timestamp(1000)
+
+        url = self.trading_rules_url
+
+        response = self.trading_rules_request_mock_response
+        results = response
+        duplicate = deepcopy(results['data'][0])
+        duplicate["symbol"] = f"{self.exchange_trading_pair}_12345"
+        duplicate["multiplier"] = str(float(duplicate["multiplier"]) + 1)
+        results['data'].append(duplicate)
+        mock_api.get(url, body=json.dumps(response))
+
+        self.async_run_with_timeout(self.exchange.start_network())
+
+        self.assertEqual(1, len(self.exchange.trading_rules))
+        self.assertIn(self.trading_pair, self.exchange.trading_rules)
+        self.assertEqual(repr(self.expected_trading_rule), repr(self.exchange.trading_rules[self.trading_pair]))
+
+    @aioresponses()
+    def test_user_stream_update_for_order_full_fill(self, mock_api):
+        self.exchange._set_current_timestamp(1640780000)
+        self._simulate_trading_rules_initialized()
+        leverage = 2
+        self.exchange._perpetual_trading.set_leverage(self.trading_pair, leverage)
+        self.exchange.start_tracking_order(
+            order_id=self.client_order_id_prefix + "1",
+            exchange_order_id=self.exchange_order_id_prefix + "1",
+            trading_pair=self.trading_pair,
+            order_type=OrderType.LIMIT,
+            trade_type=TradeType.SELL,
+            price=Decimal("10000"),
+            amount=Decimal("1"),
+            position_action=PositionAction.OPEN,
+        )
+        order = self.exchange.in_flight_orders[self.client_order_id_prefix + "1"]
+
+        order_event = self.order_event_for_full_fill_websocket_update(order=order)
+        trade_event = self.trade_event_for_full_fill_websocket_update(order=order)
+        expected_unrealized_pnl = 12
+        position_event = self.position_event_for_full_fill_websocket_update(
+            order=order, unrealized_pnl=expected_unrealized_pnl
+        )
+
+        mock_queue = AsyncMock()
+        event_messages = []
+        if trade_event:
+            event_messages.append(trade_event)
+        if order_event:
+            event_messages.append(order_event)
+        if position_event:
+            event_messages.append(position_event)
+        event_messages.append(asyncio.CancelledError)
+        mock_queue.get.side_effect = event_messages
+        self.exchange._user_stream_tracker._user_stream = mock_queue
+
+        if self.is_order_fill_http_update_executed_during_websocket_order_event_processing:
+            self.configure_full_fill_trade_response(
+                order=order,
+                mock_api=mock_api)
+
+        try:
+            self.async_run_with_timeout(self.exchange._user_stream_event_listener())
+        except asyncio.CancelledError:
+            pass
+        # Execute one more synchronization to ensure the async task that processes the update is finished
+        self.async_run_with_timeout(order.wait_until_completely_filled())
+
+        fill_event = self.order_filled_logger.event_log[0]
+        self.assertEqual(self.exchange.current_timestamp, fill_event.timestamp)
+        self.assertEqual(order.client_order_id, fill_event.order_id)
+        self.assertEqual(order.trading_pair, fill_event.trading_pair)
+        self.assertEqual(order.trade_type, fill_event.trade_type)
+        self.assertEqual(order.order_type, fill_event.order_type)
+        self.assertEqual(order.price, fill_event.price)
+        self.assertEqual(order.amount, fill_event.amount)
+        expected_fee = self.expected_fill_fee
+        self.assertEqual(expected_fee, fill_event.trade_fee)
+        self.assertEqual(leverage, fill_event.leverage)
+        self.assertEqual(PositionAction.OPEN.value, fill_event.position)
+
+        sell_event = self.sell_order_completed_logger.event_log[0]
+        self.assertEqual(self.exchange.current_timestamp, sell_event.timestamp)
+        self.assertEqual(order.client_order_id, sell_event.order_id)
+        self.assertEqual(order.base_asset, sell_event.base_asset)
+        self.assertEqual(order.quote_asset, sell_event.quote_asset)
+        self.assertEqual(order.amount, sell_event.base_asset_amount)
+        self.assertEqual(order.amount * fill_event.price, sell_event.quote_asset_amount)
+        self.assertEqual(order.order_type, sell_event.order_type)
+        self.assertEqual(order.exchange_order_id, sell_event.exchange_order_id)
+        self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
+        self.assertTrue(order.is_filled)
+        self.assertTrue(order.is_done)
+
+        self.assertTrue(
+            self.is_logged(
+                "INFO",
+                f"SELL order {order.client_order_id} completely filled."
+            )
+        )
+
+        self.assertEqual(1, len(self.exchange.account_positions))
+
+        position: Position = self.exchange.account_positions[self.trading_pair]
+        self.assertEqual(self.trading_pair, position.trading_pair)
+        self.assertEqual(PositionSide.SHORT, position.position_side)
+        self.assertEqual(expected_unrealized_pnl, position.unrealized_pnl)
+        self.assertEqual(fill_event.price, position.entry_price)
+        self.assertEqual(-fill_event.amount, (self.exchange.get_quantity_of_contracts(self.trading_pair, position.amount)))
+        self.assertEqual(leverage, position.leverage)
+
+    @aioresponses()
+    def test_lost_order_user_stream_full_fill_events_are_processed(self, mock_api):
+        self.exchange._set_current_timestamp(1640780000)
+        self._simulate_trading_rules_initialized()
+        self.exchange.start_tracking_order(
+            order_id=self.client_order_id_prefix + "1",
+            exchange_order_id=str(self.expected_exchange_order_id),
+            trading_pair=self.trading_pair,
+            order_type=OrderType.LIMIT,
+            trade_type=TradeType.BUY,
+            price=Decimal("10000"),
+            amount=Decimal("1"),
+        )
+        order = self.exchange.in_flight_orders[self.client_order_id_prefix + "1"]
+
+        for _ in range(self.exchange._order_tracker._lost_order_count_limit + 1):
+            self.async_run_with_timeout(
+                self.exchange._order_tracker.process_order_not_found(client_order_id=order.client_order_id))
+
+        self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
+
+        order_event = self.order_event_for_full_fill_websocket_update(order=order)
+        trade_event = self.trade_event_for_full_fill_websocket_update(order=order)
+
+        mock_queue = AsyncMock()
+        event_messages = []
+        if trade_event:
+            event_messages.append(trade_event)
+        if order_event:
+            event_messages.append(order_event)
+        event_messages.append(asyncio.CancelledError)
+        mock_queue.get.side_effect = event_messages
+        self.exchange._user_stream_tracker._user_stream = mock_queue
+
+        if self.is_order_fill_http_update_executed_during_websocket_order_event_processing:
+            self.configure_full_fill_trade_response(
+                order=order,
+                mock_api=mock_api)
+
+        try:
+            self.async_run_with_timeout(self.exchange._user_stream_event_listener())
+        except asyncio.CancelledError:
+            pass
+        # Execute one more synchronization to ensure the async task that processes the update is finished
+        self.async_run_with_timeout(order.wait_until_completely_filled())
+
+        fill_event = self.order_filled_logger.event_log[0]
+        self.assertEqual(self.exchange.current_timestamp, fill_event.timestamp)
+        self.assertEqual(order.client_order_id, fill_event.order_id)
+        self.assertEqual(order.trading_pair, fill_event.trading_pair)
+        self.assertEqual(order.trade_type, fill_event.trade_type)
+        self.assertEqual(order.order_type, fill_event.order_type)
+        self.assertEqual(order.price, fill_event.price)
+        self.assertEqual(order.amount, fill_event.amount)
+        expected_fee = self.expected_fill_fee
+        self.assertEqual(expected_fee, fill_event.trade_fee)
+
+        self.assertEqual(0, len(self.buy_order_completed_logger.event_log))
+        self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
+        self.assertNotIn(order.client_order_id, self.exchange._order_tracker.lost_orders)
+        self.assertTrue(order.is_filled)
+        self.assertTrue(order.is_failure)

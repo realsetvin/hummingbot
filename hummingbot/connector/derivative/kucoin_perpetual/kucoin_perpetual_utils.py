@@ -10,11 +10,11 @@ from hummingbot.core.data_type.trade_fee import TradeFeeSchema
 DEFAULT_FEES = TradeFeeSchema(
     maker_percent_fee_decimal=Decimal("0.0002"),
     taker_percent_fee_decimal=Decimal("0.0006"),
-)
+    percent_fee_token="USDT")
 
 CENTRALIZED = True
 
-EXAMPLE_PAIR = "BTC-USD"
+EXAMPLE_PAIR = "XBT-USDT"
 
 
 def is_exchange_information_valid(exchange_info: Dict[str, Any]) -> bool:
@@ -65,52 +65,3 @@ class KucoinPerpetualConfigMap(BaseConnectorConfigMap):
 
 
 KEYS = KucoinPerpetualConfigMap.construct()
-
-OTHER_DOMAINS = ["kucoin_perpetual_testnet"]
-OTHER_DOMAINS_PARAMETER = {"kucoin_perpetual_testnet": "kucoin_perpetual_testnet"}
-OTHER_DOMAINS_EXAMPLE_PAIR = {"kucoin_perpetual_testnet": "BTC-USDT"}
-OTHER_DOMAINS_DEFAULT_FEES = {
-    "kucoin_perpetual_testnet": TradeFeeSchema(
-        maker_percent_fee_decimal=Decimal("-0.00025"),
-        taker_percent_fee_decimal=Decimal("0.00075"),
-    )
-}
-
-
-class KucoinPerpetualTestnetConfigMap(BaseConnectorConfigMap):
-    connector: str = Field(default="kucoin_perpetual_testnet", client_data=None)
-    kucoin_perpetual_testnet_api_key: SecretStr = Field(
-        default=...,
-        client_data=ClientFieldData(
-            prompt=lambda cm: "Enter your Kucoin Perpetual Testnet API key",
-            is_secure=True,
-            is_connect_key=True,
-            prompt_on_new=True,
-        )
-    )
-    kucoin_perpetual_testnet_secret_key: SecretStr = Field(
-        default=...,
-        client_data=ClientFieldData(
-            prompt=lambda cm: "Enter your Kucoin Perpetual Testnet secret key",
-            is_secure=True,
-            is_connect_key=True,
-            prompt_on_new=True,
-        )
-    )
-    kucoin_perpetual_testnet_passphrase: SecretStr = Field(
-        default=...,
-        client_data=ClientFieldData(
-            prompt=lambda cm: "Enter your KuCoin Perpetual Testnet passphrase",
-            is_secure=True,
-            is_connect_key=True,
-            prompt_on_new=True,
-        )
-    )
-
-    class Config:
-        title = "kucoin_perpetual_testnet"
-
-
-OTHER_DOMAINS_KEYS = {
-    "kucoin_perpetual_testnet": KucoinPerpetualTestnetConfigMap.construct()
-}

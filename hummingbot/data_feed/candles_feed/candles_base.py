@@ -1,8 +1,10 @@
 import asyncio
+import os
 from collections import deque
 from typing import Optional
 
 import pandas as pd
+from bidict import bidict
 
 from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
 from hummingbot.core.network_base import NetworkBase
@@ -19,6 +21,24 @@ class CandlesBase(NetworkBase):
     Also implements the Throttler module for API rate limiting, but it's not so necessary since the realtime data should
     be updated via websockets mainly.
     """
+    interval_to_seconds = bidict({
+        "1s": 1,
+        "1m": 60,
+        "3m": 180,
+        "5m": 300,
+        "15m": 900,
+        "30m": 1800,
+        "1h": 3600,
+        "2h": 7200,
+        "4h": 14400,
+        "6h": 21600,
+        "8h": 28800,
+        "12h": 43200,
+        "1d": 86400,
+        "3d": 259200,
+        "1w": 604800,
+        "1M": 2592000
+    })
     columns = ["timestamp", "open", "high", "low", "close", "volume", "quote_asset_volume",
                "n_trades", "taker_buy_base_volume", "taker_buy_quote_volume"]
 
@@ -33,7 +53,8 @@ class CandlesBase(NetworkBase):
         if interval in self.intervals.keys():
             self.interval = interval
         else:
-            self.logger().exception(f"Interval {interval} is not supported. Available Intervals: {self.intervals.keys()}")
+            self.logger().exception(
+                f"Interval {interval} is not supported. Available Intervals: {self.intervals.keys()}")
             raise
 
     async def start_network(self):
@@ -98,6 +119,19 @@ class CandlesBase(NetworkBase):
 
     def get_exchange_trading_pair(self, trading_pair):
         raise NotImplementedError
+
+    def load_candles_from_csv(self, data_path: str):
+        """
+        This method loads the candles from a CSV file.
+        :param data_path: data path that holds the CSV file
+        """
+        filename = f"candles_{self.name}_{self.interval}.csv"
+        file_path = os.path.join(data_path, filename)
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File '{file_path}' does not exist.")
+        df = pd.read_csv(file_path)
+        df.sort_values(by="timestamp", ascending=False, inplace=True)
+        self._candles.extendleft(df.values.tolist())
 
     async def fetch_candles(self,
                             start_time: Optional[int] = None,
@@ -166,3 +200,11 @@ class CandlesBase(NetworkBase):
     async def _on_order_stream_interruption(self, websocket_assistant: Optional[WSAssistant] = None):
         websocket_assistant and await websocket_assistant.disconnect()
         self._candles.clear()
+
+    def get_seconds_from_interval(self, interval: str) -> int:
+        """
+        This method returns the number of seconds from the interval string.
+        :param interval: interval string
+        :return: number of seconds
+        """
+        return self.interval_to_seconds[interval]

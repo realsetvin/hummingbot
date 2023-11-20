@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 from aioresponses import aioresponses
 
-from hummingbot.connector.gateway.clob_spot.data_sources.clob_api_data_source_base import PlaceOrderResult
 from hummingbot.connector.gateway.clob_spot.data_sources.dexalot import dexalot_constants as CONSTANTS
 from hummingbot.connector.gateway.clob_spot.data_sources.dexalot.dexalot_api_data_source import DexalotAPIDataSource
 from hummingbot.connector.gateway.clob_spot.data_sources.dexalot.dexalot_constants import HB_TO_DEXALOT_STATUS_MAP
+from hummingbot.connector.gateway.common_types import PlaceOrderResult
 from hummingbot.connector.gateway.gateway_in_flight_order import GatewayInFlightOrder
 from hummingbot.connector.test_support.gateway_clob_api_data_source_test import AbstractGatewayCLOBAPIDataSourceTests
 from hummingbot.connector.test_support.network_mocking_assistant import NetworkMockingAssistant
@@ -89,13 +89,14 @@ class DexalotAPIDataSourceTest(AbstractGatewayCLOBAPIDataSourceTests.GatewayCLOB
         regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?"))
         self.mock_api.get(regex_url, body=json.dumps(response))
 
-    def build_api_data_source(self) -> DexalotAPIDataSource:
+    def build_api_data_source(self, with_api_key: bool = True) -> DexalotAPIDataSource:
+        api_key = self.api_key_mock if with_api_key else ""
         connector_spec = {
-            "api_key": "someAPIKey",
+            "api_key": api_key,
             "chain": "avalanche",
             "network": "dexalot",
             "wallet_address": self.account_id,
-            "additional_prompt_values": {"api_key": self.api_key_mock},
+            "additional_prompt_values": {"api_key": api_key},
         }
         data_source = DexalotAPIDataSource(
             trading_pairs=[self.trading_pair],
@@ -129,9 +130,9 @@ class DexalotAPIDataSourceTest(AbstractGatewayCLOBAPIDataSourceTests.GatewayCLOB
                 "makerRate": float(self.expected_maker_taker_fee_rates.maker),
                 "takerRate": float(self.expected_maker_taker_fee_rates.taker),
                 "baseDecimals": self.expected_base_decimals,
-                "baseDisplayDecimals": int(math.log10(1 / self.expected_min_price_increment)),
+                "baseDisplayDecimals": 3,
                 "quoteDecimals": self.expected_quote_decimals,
-                "quoteDisplayDecimals": 3,
+                "quoteDisplayDecimals": int(math.log10(1 / self.expected_min_price_increment)),
                 "allowedSlippagePercent": 1,
                 "addOrderPaused": False,
                 "pairPaused": False,
@@ -489,10 +490,55 @@ class DexalotAPIDataSourceTest(AbstractGatewayCLOBAPIDataSourceTests.GatewayCLOB
         time_mock.return_value = self.initial_timestamp
         data_source.gateway_order_tracker = self.tracker
 
+        task = asyncio.get_event_loop().create_task(coro=snapshots_logger.wait_for(event_type=OrderBookMessage))
+        self.async_tasks.append(task)
         self.async_run_with_timeout(coro=data_source.start())
         self.mocking_assistant.run_until_all_aiohttp_messages_delivered(
             websocket_mock=self.ws_connect_mock.return_value
         )
+        self.async_run_with_timeout(coro=task)
+
+        self.assertEqual(1, len(snapshots_logger.event_log))
+
+        snapshot_event: OrderBookMessage = snapshots_logger.event_log[0]
+
+        self.assertEqual(self.initial_timestamp, snapshot_event.timestamp)
+        self.assertEqual(2, len(snapshot_event.bids))
+        self.assertEqual(9, snapshot_event.bids[0].price)
+        self.assertEqual(1, snapshot_event.bids[0].amount)
+        self.assertEqual(1, len(snapshot_event.asks))
+        self.assertEqual(11, snapshot_event.asks[0].price)
+        self.assertEqual(3, snapshot_event.asks[0].amount)
+
+    @patch(
+        "hummingbot.connector.gateway.clob_spot.data_sources.dexalot.dexalot_api_data_source"
+        ".DexalotAPIDataSource._time"
+    )
+    def test_delivers_order_book_snapshot_events_without_api_key(self, time_mock: MagicMock):
+        self.async_run_with_timeout(self.data_source.stop())
+
+        data_source = self.build_api_data_source(with_api_key=False)
+        self.additional_data_sources_to_stop_on_tear_down.append(data_source)
+        data_source.min_snapshots_update_interval = 0
+        data_source.max_snapshots_update_interval = 0
+
+        snapshots_logger = EventLogger()
+
+        data_source.add_listener(
+            event_tag=OrderBookDataSourceEvent.SNAPSHOT_EVENT, listener=snapshots_logger
+        )
+
+        self.configure_orderbook_snapshot_event(bids=[[9, 1], [8, 2]], asks=[[11, 3]])
+        time_mock.return_value = self.initial_timestamp
+        data_source.gateway_order_tracker = self.tracker
+
+        task = asyncio.get_event_loop().create_task(coro=snapshots_logger.wait_for(event_type=OrderBookMessage))
+        self.async_tasks.append(task)
+        self.async_run_with_timeout(coro=data_source.start())
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(
+            websocket_mock=self.ws_connect_mock.return_value
+        )
+        self.async_run_with_timeout(coro=task)
 
         self.assertEqual(1, len(snapshots_logger.event_log))
 
@@ -556,6 +602,26 @@ class DexalotAPIDataSourceTest(AbstractGatewayCLOBAPIDataSourceTests.GatewayCLOB
         self.assertEqual(in_flight_order.client_order_id, status_update.client_order_id)
         self.assertEqual(self.expected_buy_exchange_order_id, status_update.exchange_order_id)
 
+    def test_get_order_status_update_transaction_not_found_raises(self):
+        creation_transaction_hash = "0x7cb2eafc389349f86da901cdcbfd9119425a2ea84d61c17b6ded778b6fd2g81d"  # noqa: mock
+        in_flight_order = GatewayInFlightOrder(
+            client_order_id=self.expected_sell_client_order_id,
+            trading_pair=self.trading_pair,
+            order_type=OrderType.LIMIT,
+            trade_type=TradeType.BUY,
+            creation_timestamp=self.initial_timestamp,
+            price=self.expected_sell_order_price,
+            amount=self.expected_sell_order_size,
+            creation_transaction_hash=creation_transaction_hash,
+        )
+        self.gateway_instance_mock.get_transaction_status.return_value = {"txStatus": -1}
+
+        expected_error = f"No update found for order {in_flight_order.client_order_id}"
+        with self.assertRaisesRegex(expected_exception=ValueError, expected_regex=expected_error):
+            self.async_run_with_timeout(
+                coro=self.data_source.get_order_status_update(in_flight_order=in_flight_order)
+            )
+
     @patch(
         "hummingbot.connector.gateway.clob_spot.data_sources.gateway_clob_api_data_source_base"
         ".GatewayCLOBAPIDataSourceBase._sleep",
@@ -565,10 +631,7 @@ class DexalotAPIDataSourceTest(AbstractGatewayCLOBAPIDataSourceTests.GatewayCLOB
         mock_max_order_create_per_batch = 2
 
         def sleep_mock_side_effect(delay):
-            if delay == self.data_source.current_block_time:
-                return None
-            else:
-                raise Exception
+            raise Exception
 
         sleep_mock.side_effect = sleep_mock_side_effect
 

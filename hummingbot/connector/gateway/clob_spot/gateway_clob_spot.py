@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
 from hummingbot.connector.client_order_tracker import ClientOrderTracker
-from hummingbot.connector.constants import s_decimal_NaN
+from hummingbot.connector.constants import s_decimal_0, s_decimal_NaN
 from hummingbot.connector.exchange_base import TradeType
 from hummingbot.connector.exchange_py_base import ExchangePyBase
 from hummingbot.connector.gateway.clob_spot.data_sources.gateway_clob_api_data_source_base import CLOBAPIDataSourceBase
@@ -70,6 +70,8 @@ class GatewayCLOBSPOT(ExchangePyBase):
 
         self._add_forwarders()
 
+        self.has_started = False
+
         super().__init__(client_config_map)
 
     @property
@@ -121,7 +123,7 @@ class GatewayCLOBSPOT(ExchangePyBase):
 
     @property
     def is_cancel_request_in_exchange_synchronous(self) -> bool:
-        return False
+        return self._api_data_source.is_cancel_request_in_exchange_synchronous
 
     @property
     def is_trading_required(self) -> bool:
@@ -152,28 +154,29 @@ class GatewayCLOBSPOT(ExchangePyBase):
         sd["api_data_source_initialized"] = self._api_data_source.ready
         return sd
 
+    def start(self, *args, **kwargs):
+        super().start(**kwargs)
+        safe_ensure_future(self.start_network())
+        safe_ensure_future(self._api_data_source.start())
+
+    def stop(self, *args, **kwargs):
+        super().stop(**kwargs)
+        safe_ensure_future(self._api_data_source.stop())
+
     async def start_network(self):
-        await self._api_data_source.start()
-        await super().start_network()
+        if not self.has_started:
+            await self._api_data_source.start()
+            await super().start_network()
+            self.has_started = True
 
     async def stop_network(self):
         await super().stop_network()
         await self._api_data_source.stop()
+        self.has_started = False
 
-    def tick(self, timestamp: float):
-        """
-        Includes the logic that has to be processed every time a new tick happens in the bot. Particularly it enables
-        the execution of the status update polling loop using an event.
-        """
-        last_recv_diff = timestamp - self._last_received_message_timestamp
-        poll_interval = (self.SHORT_POLL_INTERVAL
-                         if last_recv_diff > self.TICK_INTERVAL_LIMIT or not self._api_data_source.events_are_streamed
-                         else self.LONG_POLL_INTERVAL)
-        last_tick = int(self._last_timestamp / poll_interval)
-        current_tick = int(timestamp / poll_interval)
-        if current_tick > last_tick:
-            self._poll_notifier.set()
-        self._last_timestamp = timestamp
+    @property
+    def ready(self) -> bool:
+        return super().ready
 
     def supported_order_types(self) -> List[OrderType]:
         return self._api_data_source.get_supported_order_types()
@@ -371,10 +374,7 @@ class GatewayCLOBSPOT(ExchangePyBase):
 
         if order_type in [OrderType.LIMIT, OrderType.LIMIT_MAKER]:
             price = self.quantize_order_price(trading_pair, price)
-            quantize_amount_price = Decimal("0") if price.is_nan() else price
-            amount = self.quantize_order_amount(trading_pair=trading_pair, amount=amount, price=quantize_amount_price)
-        else:
-            amount = self.quantize_order_amount(trading_pair=trading_pair, amount=amount)
+        quantized_amount = self.quantize_order_amount(trading_pair=trading_pair, amount=amount)
 
         self.start_tracking_order(
             order_id=order_id,
@@ -383,25 +383,33 @@ class GatewayCLOBSPOT(ExchangePyBase):
             order_type=order_type,
             trade_type=trade_type,
             price=price,
-            amount=amount,
+            amount=quantized_amount,
             **kwargs,
         )
         order = self._order_tracker.active_orders[order_id]
+
+        if not price or price.is_nan() or price == s_decimal_0:
+            current_price: Decimal = self.get_price(trading_pair, False)
+            notional_size = current_price * quantized_amount
+        else:
+            notional_size = price * quantized_amount
 
         if order_type not in self.supported_order_types():
             self.logger().error(f"{order_type} is not in the list of supported order types")
             self._update_order_after_creation_failure(order_id=order_id, trading_pair=trading_pair)
             order = None
-        elif amount < trading_rule.min_order_size:
-            self.logger().warning(f"{trade_type.name.title()} order amount {amount} is lower than the minimum order"
-                                  f" size {trading_rule.min_order_size}. The order will not be created.")
+
+        elif quantized_amount < trading_rule.min_order_size:
+            self.logger().warning(f"{trade_type.name.title()} order amount {amount} is lower than the minimum order "
+                                  f"size {trading_rule.min_order_size}. The order will not be created, increase the "
+                                  f"amount to be higher than the minimum order size.")
             self._update_order_after_creation_failure(order_id=order_id, trading_pair=trading_pair)
             order = None
-        elif price is not None and amount * price < trading_rule.min_notional_size:
-            self.logger().warning(f"{trade_type.name.title()} order notional {amount * price} is lower than the "
-                                  f"minimum notional size {trading_rule.min_notional_size}. "
-                                  "The order will not be created.")
-            self._update_order_after_creation_failure(order_id=order_id, trading_pair=trading_pair)
+        elif notional_size < trading_rule.min_notional_size:
+            self.logger().warning(f"{trade_type.name.title()} order notional {notional_size} is lower than the "
+                                  f"minimum notional size {trading_rule.min_notional_size}. The order will not be "
+                                  f"created. Increase the amount or the price to be higher than the minimum notional.")
+            self._update_order_after_failure(order_id=order_id, trading_pair=trading_pair)
             order = None
 
         return order
@@ -720,3 +728,19 @@ class GatewayCLOBSPOT(ExchangePyBase):
 
     def _create_web_assistants_factory(self) -> Optional[WebAssistantsFactory]:
         return None
+
+    def _get_poll_interval(self, timestamp: float) -> float:
+        last_recv_diff = timestamp - self._last_received_message_timestamp
+        poll_interval = (
+            self.SHORT_POLL_INTERVAL
+            if last_recv_diff > self.TICK_INTERVAL_LIMIT or not self._api_data_source.events_are_streamed
+            else self.LONG_POLL_INTERVAL
+        )
+        return poll_interval
+
+    async def cancel_all(self, timeout_seconds: float) -> List[CancellationResult]:
+        timeout = self._api_data_source.cancel_all_orders_timeout \
+            if self._api_data_source.cancel_all_orders_timeout is not None \
+            else timeout_seconds
+
+        return await super().cancel_all(timeout)

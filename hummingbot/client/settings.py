@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from hummingbot.connector.connector_base import ConnectorBase
     from hummingbot.connector.gateway.clob_spot.data_sources.clob_api_data_source_base import CLOBAPIDataSourceBase
 
+
 # Global variables
 required_exchanges: Set[str] = set()
 requried_connector_trading_pairs: Dict[str, List[str]] = {}
@@ -68,11 +69,11 @@ class ConnectorType(Enum):
     The types of exchanges that hummingbot client can communicate with.
     """
 
-    EVM_AMM = "EVM_AMM"
-    EVM_Perpetual = "EVM_Perpetual"
-    EVM_AMM_LP = "EVM_AMM_LP"
+    AMM = "AMM"
+    AMM_LP = "AMM_LP"
+    AMM_Perpetual = "AMM_Perpetual"
     CLOB_SPOT = "CLOB_SPOT"
-    NEAR_AMM = "NEAR_AMM"
+    CLOB_PERP = "CLOB_PERP"
     Connector = "connector"
     Exchange = "exchange"
     Derivative = "derivative"
@@ -127,6 +128,7 @@ class GatewayConnectionSetting:
         chain: str,
         network: str,
         trading_type: str,
+        chain_type: str,
         wallet_address: str,
         additional_spenders: List[str],
         additional_prompt_values: Dict[str, str],
@@ -136,6 +138,7 @@ class GatewayConnectionSetting:
             "chain": chain,
             "network": network,
             "trading_type": trading_type,
+            "chain_type": chain_type,
             "wallet_address": wallet_address,
             "additional_spenders": additional_spenders,
             "additional_prompt_values": additional_prompt_values,
@@ -189,16 +192,22 @@ class ConnectorSetting(NamedTuple):
         non_gateway_connectors_types = [ConnectorType.Exchange, ConnectorType.Derivative, ConnectorType.Connector]
         return self.type not in non_gateway_connectors_types
 
+    def connector_connected(self) -> str:
+        from hummingbot.client.config.security import Security
+        return True if Security.connector_config_file_exists(self.name) else False
+
     def uses_clob_connector(self) -> bool:
-        return self.type == ConnectorType.CLOB_SPOT
+        return self.type in [ConnectorType.CLOB_SPOT, ConnectorType.CLOB_PERP]
 
     def module_name(self) -> str:
         # returns connector module name, e.g. binance_exchange
         if self.uses_gateway_generic_connector():
-            if self.type in [ConnectorType.EVM_AMM, ConnectorType.EVM_Perpetual, ConnectorType.NEAR_AMM, ConnectorType.EVM_AMM_LP]:
-                return f"gateway.amm.gateway_{self._get_module_package()}"
-            elif self.type == ConnectorType.CLOB_SPOT:
-                return f"gateway.clob_spot.gateway_{self._get_module_package()}"
+            if 'AMM' in self.type.name:
+                # AMMs currently have multiple generic connectors. chain_type is used to determine the right connector to use.
+                connector_spec: Dict[str, str] = GatewayConnectionSetting.get_connector_spec_from_market_name(self.name)
+                return f"gateway.{self.type.name.lower()}.gateway_{connector_spec['chain_type'].lower()}_{self._get_module_package()}"
+            elif 'CLOB' in self.type.name:
+                return f"gateway.{self.type.name.lower()}.gateway_{self._get_module_package()}"
             else:
                 raise ValueError(f"Unsupported connector type: {self.type}")
         return f"{self.base_name()}_{self._get_module_package()}"
@@ -225,13 +234,19 @@ class ConnectorSetting(NamedTuple):
     def get_api_data_source_module_name(self) -> str:
         module_name = ""
         if self.uses_clob_connector():
-            module_name = f"{self.name.split('_')[0]}_api_data_source"
+            if self.type == ConnectorType.CLOB_PERP:
+                module_name = f"{self.name.rsplit(sep='_', maxsplit=2)[0]}_api_data_source"
+            else:
+                module_name = f"{self.name.split('_')[0]}_api_data_source"
         return module_name
 
     def get_api_data_source_class_name(self) -> str:
         class_name = ""
         if self.uses_clob_connector():
-            class_name = f"{self.name.split('_')[0].capitalize()}APIDataSource"
+            if self.type == ConnectorType.CLOB_PERP:
+                class_name = f"{self.name.split('_')[0].capitalize()}PerpetualAPIDataSource"
+            else:
+                class_name = f"{self.name.split('_')[0].capitalize()}APIDataSource"
         return class_name
 
     def conn_init_parameters(
@@ -272,6 +287,11 @@ class ConnectorSetting(NamedTuple):
         params["trading_pairs"] = trading_pairs
         params["trading_required"] = trading_required
         params["client_config_map"] = client_config_map
+        if (self.config_keys is not None
+                and type(self.config_keys) is not dict
+                and "receive_connector_configuration" in self.config_keys.__fields__
+                and self.config_keys.receive_connector_configuration):
+            params["connector_configuration"] = self.config_keys
 
         return params
 
@@ -328,7 +348,7 @@ class ConnectorSetting(NamedTuple):
     ) -> "CLOBAPIDataSourceBase":
         module_name = self.get_api_data_source_module_name()
         parent_package = f"hummingbot.connector.gateway.{self._get_module_package()}.data_sources"
-        module_package = self.name.split("_")[0]
+        module_package = self.name.rsplit(sep="_", maxsplit=2)[0]
         module_path = f"{parent_package}.{module_package}.{module_name}"
         module: ModuleType = importlib.import_module(module_path)
         api_data_source_class = getattr(module, self.get_api_data_source_class_name())
@@ -488,16 +508,16 @@ class AllConnectorSettings:
     def get_exchange_names(cls) -> Set[str]:
         return {
             cs.name for cs in cls.get_connector_settings().values()
-            if cs.type in [ConnectorType.Exchange, ConnectorType.CLOB_SPOT]
+            if cs.type in [ConnectorType.Exchange, ConnectorType.CLOB_SPOT, ConnectorType.CLOB_PERP]
         }.union(set(PAPER_TRADE_EXCHANGES))
 
     @classmethod
     def get_derivative_names(cls) -> Set[str]:
-        return {cs.name for cs in cls.all_connector_settings.values() if cs.type is ConnectorType.Derivative or cs.type is ConnectorType.EVM_Perpetual}
+        return {cs.name for cs in cls.all_connector_settings.values() if cs.type in [ConnectorType.Derivative, ConnectorType.AMM_Perpetual, ConnectorType.CLOB_PERP]}
 
     @classmethod
     def get_derivative_dex_names(cls) -> Set[str]:
-        return {cs.name for cs in cls.all_connector_settings.values() if cs.type is ConnectorType.EVM_Perpetual}
+        return {cs.name for cs in cls.all_connector_settings.values() if cs.type is ConnectorType.AMM_Perpetual}
 
     @classmethod
     def get_other_connector_names(cls) -> Set[str]:
@@ -509,11 +529,11 @@ class AllConnectorSettings:
 
     @classmethod
     def get_gateway_amm_connector_names(cls) -> Set[str]:
-        return {cs.name for cs in cls.get_connector_settings().values() if cs.type in [ConnectorType.EVM_AMM, ConnectorType.NEAR_AMM]}
+        return {cs.name for cs in cls.get_connector_settings().values() if cs.type == ConnectorType.AMM}
 
     @classmethod
     def get_gateway_evm_amm_lp_connector_names(cls) -> Set[str]:
-        return {cs.name for cs in cls.all_connector_settings.values() if cs.type == ConnectorType.EVM_AMM_LP}
+        return {cs.name for cs in cls.all_connector_settings.values() if cs.type == ConnectorType.AMM_LP}
 
     @classmethod
     def get_gateway_clob_connector_names(cls) -> Set[str]:

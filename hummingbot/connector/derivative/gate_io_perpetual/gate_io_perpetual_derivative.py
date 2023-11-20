@@ -147,7 +147,7 @@ class GateIoPerpetualDerivative(PerpetualDerivativePyBase):
         :return a list of OrderType supported by this connector.
         Note that Market order type is no longer required and will not be used.
         """
-        return [OrderType.LIMIT, OrderType.MARKET]
+        return [OrderType.LIMIT, OrderType.MARKET, OrderType.LIMIT_MAKER]
 
     def supported_position_modes(self):
         """
@@ -209,6 +209,13 @@ class GateIoPerpetualDerivative(PerpetualDerivativePyBase):
             api_factory=self._web_assistants_factory,
             domain=self.domain,
         )
+
+    async def start_network(self):
+        """
+        Start all required tasks to update the status of the connector.
+        """
+        await self._update_trading_rules()
+        await super().start_network()
 
     async def _format_trading_rules(self, raw_trading_pair_info) -> List[TradingRule]:
         """
@@ -297,12 +304,14 @@ class GateIoPerpetualDerivative(PerpetualDerivativePyBase):
             "text": order_id,
             "contract": symbol,
             "size": float(-size) if trade_type.name.lower() == 'sell' else float(size),
-            "tif": "gtc",
         }
         if order_type.is_limit_type():
             data.update({
                 "price": f"{price:f}",
+                "tif": "gtc",
             })
+            if order_type is OrderType.LIMIT_MAKER:
+                data.update({"tif": "poc"})
         else:
             data.update({
                 "price": "0",
@@ -694,9 +703,14 @@ class GateIoPerpetualDerivative(PerpetualDerivativePyBase):
             hb_trading_pair = await self.trading_pair_associated_to_exchange_symbol(ex_trading_pair)
 
             amount = Decimal(position.get("size"))
-            position_side = PositionSide.LONG if Decimal(position.get("size")) > 0 else PositionSide.SHORT
-
-            pos_key = self._perpetual_trading.position_key(hb_trading_pair, position_side)
+            ex_mode = position.get("mode")
+            if ex_mode == 'single':
+                mode = PositionMode.ONEWAY
+                position_side = PositionSide.LONG if Decimal(position.get("size")) > 0 else PositionSide.SHORT
+            else:
+                mode = PositionMode.HEDGE
+                position_side = PositionSide.LONG if ex_mode == "dual_long" else PositionSide.SHORT
+            pos_key = self._perpetual_trading.position_key(hb_trading_pair, position_side, mode)
 
             if amount != 0:
                 trading_rule = self._trading_rules[hb_trading_pair]
