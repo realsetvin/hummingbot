@@ -52,7 +52,7 @@ ctce_logger = None
 s_decimal_NaN = Decimal("nan")
 
 
-class NonKYCExchange(ExchangeBase):
+class NonkycExchange(ExchangeBase):
     """
     NonKYCExchange connects with NonKYC exchange and provides order book pricing, user account tracking and
     trading functionality.
