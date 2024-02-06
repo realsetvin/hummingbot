@@ -1,7 +1,7 @@
 # A single source of truth for constant variables related to the exchange
 class Constants:
     EXCHANGE_NAME = "nonkyc"
-    REST_URL = "https://nonkyc.io/api/v2"
+    REST_URL = "https://api.nonkyc.io/api/v2"
     WS_PRIVATE_URL = "wss://ws.nonkyc.io"
     WS_PUBLIC_URL = "wss://ws.nonkyc.io"
 
