@@ -1,3 +1,4 @@
+import asyncio
 from test.hummingbot.data_feed.candles_feed.test_candles_base import TestCandlesBase
 
 from hummingbot.connector.test_support.network_mocking_assistant import NetworkMockingAssistant
@@ -11,6 +12,7 @@ class TestOKXPerpetualCandles(TestCandlesBase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "BTC"
         cls.quote_asset = "USDT"
         cls.interval = "1h"
@@ -23,12 +25,9 @@ class TestOKXPerpetualCandles(TestCandlesBase):
         self.data_feed = OKXPerpetualCandles(trading_pair=self.trading_pair,
                                              interval=self.interval,
                                              max_records=self.max_records)
+        self.mocking_assistant = NetworkMockingAssistant()
         self.data_feed.logger().setLevel(1)
         self.data_feed.logger().addHandler(self)
-
-    async def asyncSetUp(self):
-        await super().asyncSetUp()
-        self.mocking_assistant = NetworkMockingAssistant()
 
     @staticmethod
     def get_candles_rest_data_mock():

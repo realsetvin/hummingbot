@@ -3,8 +3,8 @@ import json
 import re
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
+from unittest import TestCase
 from unittest.mock import AsyncMock, patch
 
 from aioresponses import aioresponses
@@ -35,7 +35,7 @@ class AbstractExchangeConnectorTests:
     frameworks from discovering and tyring to run the abstract class
     """
 
-    class ExchangeConnectorTests(ABC, IsolatedAsyncioWrapperTestCase):
+    class ExchangeConnectorTests(ABC, TestCase):
         # the level is required to receive logs from the data source logger
         level = 0
 
@@ -376,7 +376,6 @@ class AbstractExchangeConnectorTests:
             cls.base_asset = "COINALPHA"
             cls.quote_asset = "HBOT"
             cls.trading_pair = f"{cls.base_asset}-{cls.quote_asset}"
-            cls.trading_pair_2 = f"{cls.base_asset}-USDT"
 
         def setUp(self) -> None:
             super().setUp()
@@ -412,8 +411,7 @@ class AbstractExchangeConnectorTests:
             return any(record.levelname == log_level and record.getMessage() == message for record in self.log_records)
 
         def async_run_with_timeout(self, coroutine: Awaitable, timeout: int = 1):
-            # ret = asyncio.get_event_loop().run_until_complete(asyncio.wait_for(coroutine, timeout))
-            ret = self.run_async_with_timeout(coroutine, timeout)
+            ret = asyncio.get_event_loop().run_until_complete(asyncio.wait_for(coroutine, timeout))
             return ret
 
         def configure_all_symbols_response(
@@ -535,12 +533,12 @@ class AbstractExchangeConnectorTests:
             self.assertNotIn(self.client_order_id_prefix + "4", self.exchange.in_flight_orders)
 
         @aioresponses()
-        async def test_all_trading_pairs(self, mock_api):
+        def test_all_trading_pairs(self, mock_api):
             self.exchange._set_trading_pair_symbol_map(None)
 
             self.configure_all_symbols_response(mock_api=mock_api)
 
-            all_trading_pairs = await (self.exchange.all_trading_pairs())
+            all_trading_pairs = self.async_run_with_timeout(coroutine=self.exchange.all_trading_pairs())
 
             expected_valid_trading_pairs = self._expected_valid_trading_pairs()
 
@@ -549,37 +547,37 @@ class AbstractExchangeConnectorTests:
                 self.assertIn(trading_pair, all_trading_pairs)
 
         @aioresponses()
-        async def test_invalid_trading_pair_not_in_all_trading_pairs(self, mock_api):
+        def test_invalid_trading_pair_not_in_all_trading_pairs(self, mock_api):
             self.exchange._set_trading_pair_symbol_map(None)
             url = self.all_symbols_url
 
             invalid_pair, response = self.all_symbols_including_invalid_pair_mock_response
             mock_api.get(url, body=json.dumps(response))
 
-            all_trading_pairs = await (self.exchange.all_trading_pairs())
+            all_trading_pairs = self.async_run_with_timeout(coroutine=self.exchange.all_trading_pairs())
 
             self.assertNotIn(invalid_pair, all_trading_pairs)
 
         @aioresponses()
-        async def test_all_trading_pairs_does_not_raise_exception(self, mock_api):
+        def test_all_trading_pairs_does_not_raise_exception(self, mock_api):
             self.exchange._set_trading_pair_symbol_map(None)
 
             url = self.all_symbols_url
             mock_api.get(url, exception=Exception)
 
-            result: List[str] = await (self.exchange.all_trading_pairs())
+            result: List[str] = self.async_run_with_timeout(self.exchange.all_trading_pairs())
 
             self.assertEqual(0, len(result))
 
         @aioresponses()
-        async def test_get_last_trade_prices(self, mock_api):
+        def test_get_last_trade_prices(self, mock_api):
             url = self.latest_prices_url
 
             response = self.latest_prices_request_mock_response
 
             mock_api.get(url, body=json.dumps(response))
 
-            latest_prices: Dict[str, float] = await (
+            latest_prices: Dict[str, float] = self.async_run_with_timeout(
                 self.exchange.get_last_traded_prices(trading_pairs=[self.trading_pair])
             )
 
@@ -587,32 +585,31 @@ class AbstractExchangeConnectorTests:
             self.assertEqual(self.expected_latest_price, latest_prices[self.trading_pair])
 
         @aioresponses()
-        async def test_check_network_success(self, mock_api):
+        def test_check_network_success(self, mock_api):
             url = self.network_status_url
             response = self.network_status_request_successful_mock_response
             mock_api.get(url, body=json.dumps(response))
 
-            network_status = await (self.exchange.check_network())
+            network_status = self.async_run_with_timeout(coroutine=self.exchange.check_network())
 
             self.assertEqual(NetworkStatus.CONNECTED, network_status)
 
         @aioresponses()
-        async def test_check_network_failure(self, mock_api):
+        def test_check_network_failure(self, mock_api):
             url = self.network_status_url
             mock_api.get(url, status=500)
 
-            ret = await (self.exchange.check_network())
+            ret = self.async_run_with_timeout(coroutine=self.exchange.check_network())
 
             self.assertEqual(ret, NetworkStatus.NOT_CONNECTED)
 
         @aioresponses()
-        async def test_check_network_raises_cancel_exception(self, mock_api):
+        def test_check_network_raises_cancel_exception(self, mock_api):
             url = self.network_status_url
 
             mock_api.get(url, exception=asyncio.CancelledError)
 
-            with self.assertRaises(asyncio.CancelledError):
-                await (self.exchange.check_network())
+            self.assertRaises(asyncio.CancelledError, self.async_run_with_timeout, self.exchange.check_network())
 
         def test_initial_status_dict(self):
             self.exchange._set_trading_pair_symbol_map(None)
@@ -623,12 +620,12 @@ class AbstractExchangeConnectorTests:
             self.assertFalse(self.exchange.ready)
 
         @aioresponses()
-        async def test_update_trading_rules(self, mock_api):
+        def test_update_trading_rules(self, mock_api):
             self.exchange._set_current_timestamp(1000)
 
             self.configure_trading_rules_response(mock_api=mock_api)
 
-            await (self.exchange._update_trading_rules())
+            self.async_run_with_timeout(coroutine=self.exchange._update_trading_rules())
 
             self.assertTrue(self.trading_pair in self.exchange.trading_rules)
             trading_rule: TradingRule = self.exchange.trading_rules[self.trading_pair]
@@ -645,12 +642,12 @@ class AbstractExchangeConnectorTests:
                                 trading_rule.min_price_increment)
 
         @aioresponses()
-        async def test_update_trading_rules_ignores_rule_with_error(self, mock_api):
+        def test_update_trading_rules_ignores_rule_with_error(self, mock_api):
             self.exchange._set_current_timestamp(1000)
 
             self.configure_erroneous_trading_rules_response(mock_api=mock_api)
 
-            await (self.exchange._update_trading_rules())
+            self.async_run_with_timeout(coroutine=self.exchange._update_trading_rules())
 
             self.assertEqual(0, len(self.exchange._trading_rules))
             self.assertTrue(
@@ -658,7 +655,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_create_buy_limit_order_successfully(self, mock_api):
+        def test_create_buy_limit_order_successfully(self, mock_api):
             self._simulate_trading_rules_initialized()
             request_sent_event = asyncio.Event()
             self.exchange._set_current_timestamp(1640780000)
@@ -672,8 +669,7 @@ class AbstractExchangeConnectorTests:
                           callback=lambda *args, **kwargs: request_sent_event.set())
 
             order_id = self.place_buy_order()
-            await (request_sent_event.wait())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(request_sent_event.wait())
 
             order_request = self._all_executed_requests(mock_api, url)[0]
             self.validate_auth_credentials_present(order_request)
@@ -700,7 +696,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_create_sell_limit_order_successfully(self, mock_api):
+        def test_create_sell_limit_order_successfully(self, mock_api):
             self._simulate_trading_rules_initialized()
             request_sent_event = asyncio.Event()
             self.exchange._set_current_timestamp(1640780000)
@@ -713,8 +709,7 @@ class AbstractExchangeConnectorTests:
                           callback=lambda *args, **kwargs: request_sent_event.set())
 
             order_id = self.place_sell_order()
-            await (request_sent_event.wait())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(request_sent_event.wait())
 
             order_request = self._all_executed_requests(mock_api, url)[0]
             self.validate_auth_credentials_present(order_request)
@@ -741,7 +736,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_create_order_fails_and_raises_failure_event(self, mock_api):
+        def test_create_order_fails_and_raises_failure_event(self, mock_api):
             self._simulate_trading_rules_initialized()
             request_sent_event = asyncio.Event()
             self.exchange._set_current_timestamp(1640780000)
@@ -751,8 +746,7 @@ class AbstractExchangeConnectorTests:
                           callback=lambda *args, **kwargs: request_sent_event.set())
 
             order_id = self.place_buy_order()
-            await (request_sent_event.wait())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(request_sent_event.wait())
 
             order_request = self._all_executed_requests(mock_api, url)[0]
             self.validate_auth_credentials_present(order_request)
@@ -770,7 +764,7 @@ class AbstractExchangeConnectorTests:
                 order=order_to_validate_request,
                 request_call=order_request)
 
-            self.assertEqual(0, len(self.buy_order_created_logger.event_log))
+            self.assertEquals(0, len(self.buy_order_created_logger.event_log))
             failure_event: MarketOrderFailureEvent = self.order_failure_logger.event_log[0]
             self.assertEqual(self.exchange.current_timestamp, failure_event.timestamp)
             self.assertEqual(OrderType.LIMIT, failure_event.order_type)
@@ -786,7 +780,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_create_order_fails_when_trading_rule_error_and_raises_failure_event(self, mock_api):
+        def test_create_order_fails_when_trading_rule_error_and_raises_failure_event(self, mock_api):
             self._simulate_trading_rules_initialized()
             request_sent_event = asyncio.Event()
             self.exchange._set_current_timestamp(1640780000)
@@ -801,13 +795,12 @@ class AbstractExchangeConnectorTests:
             )
             # The second order is used only to have the event triggered and avoid using timeouts for tests
             order_id = self.place_buy_order()
-            await asyncio.wait_for(request_sent_event.wait(), timeout=3)
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(request_sent_event.wait(), timeout=3)
 
             self.assertNotIn(order_id_for_invalid_order, self.exchange.in_flight_orders)
             self.assertNotIn(order_id, self.exchange.in_flight_orders)
 
-            self.assertEqual(0, len(self.buy_order_created_logger.event_log))
+            self.assertEquals(0, len(self.buy_order_created_logger.event_log))
             failure_event: MarketOrderFailureEvent = self.order_failure_logger.event_log[0]
             self.assertEqual(self.exchange.current_timestamp, failure_event.timestamp)
             self.assertEqual(OrderType.LIMIT, failure_event.order_type)
@@ -831,7 +824,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_cancel_order_successfully(self, mock_api):
+        def test_cancel_order_successfully(self, mock_api):
             request_sent_event = asyncio.Event()
             self.exchange._set_current_timestamp(1640780000)
 
@@ -854,8 +847,7 @@ class AbstractExchangeConnectorTests:
                 callback=lambda *args, **kwargs: request_sent_event.set())
 
             self.exchange.cancel(trading_pair=order.trading_pair, client_order_id=order.client_order_id)
-            await asyncio.wait_for(request_sent_event.wait(), timeout=1)
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(request_sent_event.wait())
 
             if url != "":
                 cancel_request = self._all_executed_requests(mock_api, url)[0]
@@ -882,7 +874,7 @@ class AbstractExchangeConnectorTests:
                 self.assertTrue(order.is_pending_cancel_confirmation)
 
         @aioresponses()
-        async def test_cancel_order_raises_failure_event_when_request_fails(self, mock_api):
+        def test_cancel_order_raises_failure_event_when_request_fails(self, mock_api):
             request_sent_event = asyncio.Event()
             self.exchange._set_current_timestamp(1640780000)
 
@@ -905,8 +897,7 @@ class AbstractExchangeConnectorTests:
                 callback=lambda *args, **kwargs: request_sent_event.set())
 
             self.exchange.cancel(trading_pair=self.trading_pair, client_order_id=self.client_order_id_prefix + "1")
-            await asyncio.wait_for(request_sent_event.wait(), timeout=1)
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(request_sent_event.wait())
 
             if url != "":
                 cancel_request = self._all_executed_requests(mock_api, url)[0]
@@ -915,7 +906,7 @@ class AbstractExchangeConnectorTests:
                     order=order,
                     request_call=cancel_request)
 
-            self.assertEqual(0, len(self.order_cancelled_logger.event_log))
+            self.assertEquals(0, len(self.order_cancelled_logger.event_log))
             self.assertTrue(
                 any(
                     log.msg.startswith(f"Failed to cancel order {order.client_order_id}")
@@ -924,7 +915,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_cancel_order_not_found_in_the_exchange(self, mock_api):
+        def test_cancel_order_not_found_in_the_exchange(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
             request_sent_event = asyncio.Event()
 
@@ -946,7 +937,7 @@ class AbstractExchangeConnectorTests:
             )
 
             self.exchange.cancel(trading_pair=self.trading_pair, client_order_id=self.client_order_id_prefix + "1")
-            await (request_sent_event.wait())
+            self.async_run_with_timeout(request_sent_event.wait())
 
             self.assertFalse(order.is_done)
             self.assertFalse(order.is_failure)
@@ -956,7 +947,7 @@ class AbstractExchangeConnectorTests:
             self.assertEqual(1, self.exchange._order_tracker._order_not_found_records[order.client_order_id])
 
         @aioresponses()
-        async def test_cancel_two_orders_with_cancel_all_and_one_fails(self, mock_api):
+        def test_cancel_two_orders_with_cancel_all_and_one_fails(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
 
             self.exchange.start_tracking_order(
@@ -990,7 +981,7 @@ class AbstractExchangeConnectorTests:
                 erroneous_order=order2,
                 mock_api=mock_api)
 
-            cancellation_results = await (self.exchange.cancel_all(10))
+            cancellation_results = self.async_run_with_timeout(self.exchange.cancel_all(10))
 
             for url in urls:
                 cancel_request = self._all_executed_requests(mock_api, url)[0]
@@ -1014,11 +1005,11 @@ class AbstractExchangeConnectorTests:
                 )
 
         @aioresponses()
-        async def test_update_balances(self, mock_api):
+        def test_update_balances(self, mock_api):
             response = self.balance_request_mock_response_for_base_and_quote
             self._configure_balance_response(response=response, mock_api=mock_api)
 
-            await (self.exchange._update_balances())
+            self.async_run_with_timeout(self.exchange._update_balances())
 
             available_balances = self.exchange.available_balances
             total_balances = self.exchange.get_all_balances()
@@ -1031,7 +1022,7 @@ class AbstractExchangeConnectorTests:
             response = self.balance_request_mock_response_only_base
 
             self._configure_balance_response(response=response, mock_api=mock_api)
-            await (self.exchange._update_balances())
+            self.async_run_with_timeout(self.exchange._update_balances())
 
             available_balances = self.exchange.available_balances
             total_balances = self.exchange.get_all_balances()
@@ -1042,7 +1033,7 @@ class AbstractExchangeConnectorTests:
             self.assertEqual(Decimal("15"), total_balances[self.base_asset])
 
         @aioresponses()
-        async def test_update_order_status_when_filled(self, mock_api):
+        def test_update_order_status_when_filled(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
             request_sent_event = asyncio.Event()
 
@@ -1072,10 +1063,9 @@ class AbstractExchangeConnectorTests:
                 mock_api=mock_api,
                 callback=lambda *args, **kwargs: request_sent_event.set())
 
-            await (self.exchange._update_order_status())
+            self.async_run_with_timeout(self.exchange._update_order_status())
             # Execute one more synchronization to ensure the async task that processes the update is finished
-            await (request_sent_event.wait())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(request_sent_event.wait())
 
             for url in (urls if isinstance(urls, list) else [urls]):
                 order_status_request = self._all_executed_requests(mock_api, url)[0]
@@ -1084,7 +1074,7 @@ class AbstractExchangeConnectorTests:
                     order=order,
                     request_call=order_status_request)
 
-            await (order.wait_until_completely_filled())
+            self.async_run_with_timeout(order.wait_until_completely_filled())
             self.assertTrue(order.is_done)
 
             if self.is_order_fill_http_update_included_in_status_update:
@@ -1130,7 +1120,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_update_order_status_when_canceled(self, mock_api):
+        def test_update_order_status_when_canceled(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
 
             self.exchange.start_tracking_order(
@@ -1148,8 +1138,7 @@ class AbstractExchangeConnectorTests:
                 order=order,
                 mock_api=mock_api)
 
-            await (self.exchange._update_order_status())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(self.exchange._update_order_status())
 
             for url in (urls if isinstance(urls, list) else [urls]):
                 order_status_request = self._all_executed_requests(mock_api, url)[0]
@@ -1166,7 +1155,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_update_order_status_when_order_has_not_changed(self, mock_api):
+        def test_update_order_status_when_order_has_not_changed(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
 
             self.exchange.start_tracking_order(
@@ -1186,7 +1175,7 @@ class AbstractExchangeConnectorTests:
 
             self.assertTrue(order.is_open)
 
-            await (self.exchange._update_order_status())
+            self.async_run_with_timeout(self.exchange._update_order_status())
 
             for url in (urls if isinstance(urls, list) else [urls]):
                 order_status_request = self._all_executed_requests(mock_api, url)[0]
@@ -1198,7 +1187,7 @@ class AbstractExchangeConnectorTests:
             self.assertFalse(order.is_done)
 
         @aioresponses()
-        async def test_update_order_status_when_request_fails_marks_order_as_not_found(self, mock_api):
+        def test_update_order_status_when_request_fails_marks_order_as_not_found(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
 
             self.exchange.start_tracking_order(
@@ -1216,7 +1205,7 @@ class AbstractExchangeConnectorTests:
                 order=order,
                 mock_api=mock_api)
 
-            await (self.exchange._update_order_status())
+            self.async_run_with_timeout(self.exchange._update_order_status())
 
             if url:
                 order_status_request = self._all_executed_requests(mock_api, url)[0]
@@ -1232,7 +1221,7 @@ class AbstractExchangeConnectorTests:
             self.assertEqual(1, self.exchange._order_tracker._order_not_found_records[order.client_order_id])
 
         @aioresponses()
-        async def test_update_order_status_when_order_has_not_changed_and_one_partial_fill(self, mock_api):
+        def test_update_order_status_when_order_has_not_changed_and_one_partial_fill(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
 
             self.exchange.start_tracking_order(
@@ -1257,8 +1246,7 @@ class AbstractExchangeConnectorTests:
 
             self.assertTrue(order.is_open)
 
-            await (self.exchange._update_order_status())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(self.exchange._update_order_status())
 
             if order_url:
                 order_status_request = self._all_executed_requests(mock_api, order_url)[0]
@@ -1289,7 +1277,7 @@ class AbstractExchangeConnectorTests:
                 self.assertEqual(self.expected_fill_fee, fill_event.trade_fee)
 
         @aioresponses()
-        async def test_update_order_status_when_filled_correctly_processed_even_when_trade_fill_update_fails(self, mock_api):
+        def test_update_order_status_when_filled_correctly_processed_even_when_trade_fill_update_fails(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
 
             self.exchange.start_tracking_order(
@@ -1315,10 +1303,9 @@ class AbstractExchangeConnectorTests:
             # Since the trade fill update will fail we need to manually set the event
             # to allow the ClientOrderTracker to process the last status update
             order.completely_filled_event.set()
-            await (self.exchange._update_order_status())
+            self.async_run_with_timeout(self.exchange._update_order_status())
             # Execute one more synchronization to ensure the async task that processes the update is finished
-            await (order.wait_until_completely_filled())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(order.wait_until_completely_filled())
 
             for url in (urls if isinstance(urls, list) else [urls]):
                 order_status_request = self._all_executed_requests(mock_api, url)[0]
@@ -1355,7 +1342,7 @@ class AbstractExchangeConnectorTests:
                 )
             )
 
-        async def test_user_stream_update_for_new_order(self):
+        def test_user_stream_update_for_new_order(self):
             self.exchange._set_current_timestamp(1640780000)
             self.exchange.start_tracking_order(
                 order_id=self.client_order_id_prefix + "1",
@@ -1376,10 +1363,9 @@ class AbstractExchangeConnectorTests:
             self.exchange._user_stream_tracker._user_stream = mock_queue
 
             try:
-                await (self.exchange._user_stream_event_listener())
+                self.async_run_with_timeout(self.exchange._user_stream_event_listener())
             except asyncio.CancelledError:
                 pass
-            await asyncio.sleep(0.1)
 
             event: BuyOrderCreatedEvent = self.buy_order_created_logger.event_log[0]
             self.assertEqual(self.exchange.current_timestamp, event.timestamp)
@@ -1395,7 +1381,7 @@ class AbstractExchangeConnectorTests:
 
             self.assertTrue(self.is_logged("INFO", tracked_order.build_order_created_message()))
 
-        async def test_user_stream_update_for_canceled_order(self):
+        def test_user_stream_update_for_canceled_order(self):
             self.exchange._set_current_timestamp(1640780000)
             self.exchange.start_tracking_order(
                 order_id=self.client_order_id_prefix + "1",
@@ -1416,10 +1402,9 @@ class AbstractExchangeConnectorTests:
             self.exchange._user_stream_tracker._user_stream = mock_queue
 
             try:
-                await (self.exchange._user_stream_event_listener())
+                self.async_run_with_timeout(self.exchange._user_stream_event_listener())
             except asyncio.CancelledError:
                 pass
-            await asyncio.sleep(0.1)
 
             cancel_event: OrderCancelledEvent = self.order_cancelled_logger.event_log[0]
             self.assertEqual(self.exchange.current_timestamp, cancel_event.timestamp)
@@ -1434,7 +1419,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_user_stream_update_for_order_full_fill(self, mock_api):
+        def test_user_stream_update_for_order_full_fill(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
             self.exchange.start_tracking_order(
                 order_id=self.client_order_id_prefix + "1",
@@ -1466,12 +1451,11 @@ class AbstractExchangeConnectorTests:
                     mock_api=mock_api)
 
             try:
-                await (self.exchange._user_stream_event_listener())
+                self.async_run_with_timeout(self.exchange._user_stream_event_listener())
             except asyncio.CancelledError:
                 pass
             # Execute one more synchronization to ensure the async task that processes the update is finished
-            await (order.wait_until_completely_filled())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(order.wait_until_completely_filled())
 
             fill_event: OrderFilledEvent = self.order_filled_logger.event_log[0]
             self.assertEqual(self.exchange.current_timestamp, fill_event.timestamp)
@@ -1504,7 +1488,7 @@ class AbstractExchangeConnectorTests:
                 )
             )
 
-        async def test_user_stream_balance_update(self):
+        def test_user_stream_balance_update(self):
             if self.exchange.real_time_balance_update:
                 self.exchange._set_current_timestamp(1640780000)
 
@@ -1515,25 +1499,26 @@ class AbstractExchangeConnectorTests:
                 self.exchange._user_stream_tracker._user_stream = mock_queue
 
                 try:
-                    await (self.exchange._user_stream_event_listener())
+                    self.async_run_with_timeout(self.exchange._user_stream_event_listener())
                 except asyncio.CancelledError:
                     pass
-                await asyncio.sleep(0.1)
 
                 self.assertEqual(Decimal("10"), self.exchange.available_balances[self.base_asset])
                 self.assertEqual(Decimal("15"), self.exchange.get_balance(self.base_asset))
 
-        async def test_user_stream_raises_cancel_exception(self):
+        def test_user_stream_raises_cancel_exception(self):
             self.exchange._set_current_timestamp(1640780000)
 
             mock_queue = AsyncMock()
             mock_queue.get.side_effect = asyncio.CancelledError
             self.exchange._user_stream_tracker._user_stream = mock_queue
 
-            with self.assertRaises(asyncio.CancelledError):
-                await (self.exchange._user_stream_event_listener())
+            self.assertRaises(
+                asyncio.CancelledError,
+                self.async_run_with_timeout,
+                self.exchange._user_stream_event_listener())
 
-        async def test_user_stream_logs_errors(self):
+        def test_user_stream_logs_errors(self):
             self.exchange._set_current_timestamp(1640780000)
 
             incomplete_event = "Invalid message"
@@ -1544,10 +1529,9 @@ class AbstractExchangeConnectorTests:
 
             with patch(f"{type(self.exchange).__module__}.{type(self.exchange).__qualname__}._sleep"):
                 try:
-                    await (self.exchange._user_stream_event_listener())
+                    self.async_run_with_timeout(self.exchange._user_stream_event_listener())
                 except asyncio.CancelledError:
                     pass
-            await asyncio.sleep(0.1)
 
             self.assertTrue(
                 self.is_logged(
@@ -1557,7 +1541,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_lost_order_included_in_order_fills_update_and_not_in_order_status_update(self, mock_api):
+        def test_lost_order_included_in_order_fills_update_and_not_in_order_status_update(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
             request_sent_event = asyncio.Event()
 
@@ -1573,7 +1557,7 @@ class AbstractExchangeConnectorTests:
             order: InFlightOrder = self.exchange.in_flight_orders[self.client_order_id_prefix + "1"]
 
             for _ in range(self.exchange._order_tracker._lost_order_count_limit + 1):
-                await (
+                self.async_run_with_timeout(
                     self.exchange._order_tracker.process_order_not_found(client_order_id=order.client_order_id))
 
             self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
@@ -1594,13 +1578,11 @@ class AbstractExchangeConnectorTests:
                 mock_api=mock_api,
                 callback=lambda *args, **kwargs: request_sent_event.set())
 
-            await (self.exchange._update_order_status())
+            self.async_run_with_timeout(self.exchange._update_order_status())
             # Execute one more synchronization to ensure the async task that processes the update is finished
-            await (request_sent_event.wait())
+            self.async_run_with_timeout(request_sent_event.wait())
 
-            await (order.wait_until_completely_filled())
-            await asyncio.sleep(0.1)
-
+            self.async_run_with_timeout(order.wait_until_completely_filled())
             self.assertTrue(order.is_done)
             self.assertTrue(order.is_failure)
 
@@ -1639,10 +1621,9 @@ class AbstractExchangeConnectorTests:
                 mock_api=mock_api,
                 callback=lambda *args, **kwargs: request_sent_event.set())
 
-            await (self.exchange._update_lost_orders_status())
+            self.async_run_with_timeout(self.exchange._update_lost_orders_status())
             # Execute one more synchronization to ensure the async task that processes the update is finished
-            await (request_sent_event.wait())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(request_sent_event.wait())
 
             self.assertTrue(order.is_done)
             self.assertTrue(order.is_failure)
@@ -1658,7 +1639,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_cancel_lost_order_successfully(self, mock_api):
+        def test_cancel_lost_order_successfully(self, mock_api):
             request_sent_event = asyncio.Event()
             self.exchange._set_current_timestamp(1640780000)
 
@@ -1676,7 +1657,7 @@ class AbstractExchangeConnectorTests:
             order: InFlightOrder = self.exchange.in_flight_orders[self.client_order_id_prefix + "1"]
 
             for _ in range(self.exchange._order_tracker._lost_order_count_limit + 1):
-                await (
+                self.async_run_with_timeout(
                     self.exchange._order_tracker.process_order_not_found(client_order_id=order.client_order_id))
 
             self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
@@ -1686,10 +1667,8 @@ class AbstractExchangeConnectorTests:
                 mock_api=mock_api,
                 callback=lambda *args, **kwargs: request_sent_event.set())
 
-            await asyncio.wait_for(self.exchange._cancel_lost_orders(), timeout=1)
-            await asyncio.sleep(0.1)
-            await asyncio.wait_for(request_sent_event.wait(), timeout=1)
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(self.exchange._cancel_lost_orders())
+            self.async_run_with_timeout(request_sent_event.wait())
 
             if url:
                 cancel_request = self._all_executed_requests(mock_api, url)[0]
@@ -1708,7 +1687,7 @@ class AbstractExchangeConnectorTests:
                 self.assertTrue(order.is_failure)
 
         @aioresponses()
-        async def test_cancel_lost_order_raises_failure_event_when_request_fails(self, mock_api):
+        def test_cancel_lost_order_raises_failure_event_when_request_fails(self, mock_api):
             request_sent_event = asyncio.Event()
             self.exchange._set_current_timestamp(1640780000)
 
@@ -1726,7 +1705,7 @@ class AbstractExchangeConnectorTests:
             order = self.exchange.in_flight_orders[self.client_order_id_prefix + "1"]
 
             for _ in range(self.exchange._order_tracker._lost_order_count_limit + 1):
-                await (
+                self.async_run_with_timeout(
                     self.exchange._order_tracker.process_order_not_found(client_order_id=order.client_order_id))
 
             self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
@@ -1736,10 +1715,8 @@ class AbstractExchangeConnectorTests:
                 mock_api=mock_api,
                 callback=lambda *args, **kwargs: request_sent_event.set())
 
-            await asyncio.wait_for(self.exchange._cancel_lost_orders(), timeout=1)
-            await asyncio.sleep(0.1)
-            await asyncio.wait_for(request_sent_event.wait(), timeout=1)
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(self.exchange._cancel_lost_orders())
+            self.async_run_with_timeout(request_sent_event.wait())
 
             if url:
                 cancel_request = self._all_executed_requests(mock_api, url)[0]
@@ -1749,7 +1726,7 @@ class AbstractExchangeConnectorTests:
                     request_call=cancel_request)
 
             self.assertIn(order.client_order_id, self.exchange._order_tracker.lost_orders)
-            self.assertEqual(0, len(self.order_cancelled_logger.event_log))
+            self.assertEquals(0, len(self.order_cancelled_logger.event_log))
             self.assertTrue(
                 any(
                     log.msg.startswith(f"Failed to cancel order {order.client_order_id}")
@@ -1758,7 +1735,7 @@ class AbstractExchangeConnectorTests:
             )
 
         @aioresponses()
-        async def test_lost_order_removed_if_not_found_during_order_status_update(self, mock_api):
+        def test_lost_order_removed_if_not_found_during_order_status_update(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
             request_sent_event = asyncio.Event()
 
@@ -1774,7 +1751,7 @@ class AbstractExchangeConnectorTests:
             order: InFlightOrder = self.exchange.in_flight_orders[self.client_order_id_prefix + "1"]
 
             for _ in range(self.exchange._order_tracker._lost_order_count_limit + 1):
-                await (
+                self.async_run_with_timeout(
                     self.exchange._order_tracker.process_order_not_found(client_order_id=order.client_order_id)
                 )
 
@@ -1788,10 +1765,9 @@ class AbstractExchangeConnectorTests:
                 order=order, mock_api=mock_api, callback=lambda *args, **kwargs: request_sent_event.set()
             )
 
-            await (self.exchange._update_lost_orders_status())
+            self.async_run_with_timeout(self.exchange._update_lost_orders_status())
             # Execute one more synchronization to ensure the async task that processes the update is finished
-            await (request_sent_event.wait())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(request_sent_event.wait())
 
             self.assertTrue(order.is_done)
             self.assertTrue(order.is_failure)
@@ -1803,7 +1779,7 @@ class AbstractExchangeConnectorTests:
                 self.is_logged("INFO", f"BUY order {order.client_order_id} completely filled.")
             )
 
-        async def test_lost_order_removed_after_cancel_status_user_event_received(self):
+        def test_lost_order_removed_after_cancel_status_user_event_received(self):
             self.exchange._set_current_timestamp(1640780000)
             self.exchange.start_tracking_order(
                 order_id=self.client_order_id_prefix + "1",
@@ -1817,7 +1793,7 @@ class AbstractExchangeConnectorTests:
             order = self.exchange.in_flight_orders[self.client_order_id_prefix + "1"]
 
             for _ in range(self.exchange._order_tracker._lost_order_count_limit + 1):
-                await (
+                self.async_run_with_timeout(
                     self.exchange._order_tracker.process_order_not_found(client_order_id=order.client_order_id))
 
             self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
@@ -1830,10 +1806,9 @@ class AbstractExchangeConnectorTests:
             self.exchange._user_stream_tracker._user_stream = mock_queue
 
             try:
-                await (self.exchange._user_stream_event_listener())
+                self.async_run_with_timeout(self.exchange._user_stream_event_listener())
             except asyncio.CancelledError:
                 pass
-            await asyncio.sleep(0.1)
 
             self.assertNotIn(order.client_order_id, self.exchange._order_tracker.lost_orders)
             self.assertEqual(0, len(self.order_cancelled_logger.event_log))
@@ -1842,7 +1817,7 @@ class AbstractExchangeConnectorTests:
             self.assertTrue(order.is_failure)
 
         @aioresponses()
-        async def test_lost_order_user_stream_full_fill_events_are_processed(self, mock_api):
+        def test_lost_order_user_stream_full_fill_events_are_processed(self, mock_api):
             self.exchange._set_current_timestamp(1640780000)
             self.exchange.start_tracking_order(
                 order_id=self.client_order_id_prefix + "1",
@@ -1856,7 +1831,7 @@ class AbstractExchangeConnectorTests:
             order = self.exchange.in_flight_orders[self.client_order_id_prefix + "1"]
 
             for _ in range(self.exchange._order_tracker._lost_order_count_limit + 1):
-                await (
+                self.async_run_with_timeout(
                     self.exchange._order_tracker.process_order_not_found(client_order_id=order.client_order_id))
 
             self.assertNotIn(order.client_order_id, self.exchange.in_flight_orders)
@@ -1880,12 +1855,11 @@ class AbstractExchangeConnectorTests:
                     mock_api=mock_api)
 
             try:
-                await (self.exchange._user_stream_event_listener())
+                self.async_run_with_timeout(self.exchange._user_stream_event_listener())
             except asyncio.CancelledError:
                 pass
             # Execute one more synchronization to ensure the async task that processes the update is finished
-            await (order.wait_until_completely_filled())
-            await asyncio.sleep(0.1)
+            self.async_run_with_timeout(order.wait_until_completely_filled())
 
             fill_event: OrderFilledEvent = self.order_filled_logger.event_log[0]
             self.assertEqual(self.exchange.current_timestamp, fill_event.timestamp)

@@ -2,9 +2,9 @@ import time
 from decimal import Decimal
 from typing import Any, Dict
 
-from pydantic import ConfigDict, Field, SecretStr
+from pydantic import Field, SecretStr
 
-from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
+from hummingbot.client.config.config_data_types import BaseConnectorConfigMap, ClientFieldData
 from hummingbot.core.data_type.trade_fee import TradeFeeSchema
 
 DEFAULT_FEES = TradeFeeSchema(
@@ -33,38 +33,40 @@ def get_ms_timestamp() -> int:
 
 
 class AscendExConfigMap(BaseConnectorConfigMap):
-    connector: str = "ascend_ex"
+    connector: str = Field(default="ascend_ex", client_data=None)
     ascend_ex_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your AscendEx API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your AscendEx API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
     ascend_ex_secret_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your AscendEx secret key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your AscendEx secret key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
     ascend_ex_group_id: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your AscendEx group Id",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your AscendEx group Id",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
-    model_config = ConfigDict(title="ascend_ex")
+
+    class Config:
+        title = "ascend_ex"
 
 
-KEYS = AscendExConfigMap.model_construct()
+KEYS = AscendExConfigMap.construct()
 
 
 def _time():

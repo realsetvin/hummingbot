@@ -1,9 +1,9 @@
 from decimal import Decimal
 from typing import Any, Dict
 
-from pydantic import ConfigDict, Field, SecretStr
+from pydantic import Field, SecretStr
 
-from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
+from hummingbot.client.config.config_data_types import BaseConnectorConfigMap, ClientFieldData
 from hummingbot.core.data_type.trade_fee import TradeFeeSchema
 
 # Bitget fees: https://www.bitget.com/en/rate?tab=1
@@ -28,35 +28,37 @@ def is_exchange_information_valid(exchange_info: Dict[str, Any]) -> bool:
 
 
 class BitgetPerpetualConfigMap(BaseConnectorConfigMap):
-    connector: str = "bitget_perpetual"
+    connector: str = Field(default="bitget_perpetual", client_data=None)
     bitget_perpetual_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Bitget Perpetual API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Bitget Perpetual API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
     bitget_perpetual_secret_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Bitget Perpetual secret key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Bitget Perpetual secret key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
     bitget_perpetual_passphrase: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Bitget Perpetual passphrase",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Bitget Perpetual passphrase",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
-    model_config = ConfigDict(title="bitget_perpetual")
+
+    class Config:
+        title = "bitget_perpetual"
 
 
-KEYS = BitgetPerpetualConfigMap.model_construct()
+KEYS = BitgetPerpetualConfigMap.construct()

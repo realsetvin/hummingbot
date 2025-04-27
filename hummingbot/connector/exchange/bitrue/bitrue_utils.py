@@ -1,9 +1,9 @@
 from decimal import Decimal
 from typing import Any, Dict
 
-from pydantic import ConfigDict, Field, SecretStr
+from pydantic import Field, SecretStr
 
-from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
+from hummingbot.client.config.config_data_types import BaseConnectorConfigMap, ClientFieldData
 from hummingbot.core.data_type.trade_fee import TradeFeeSchema
 
 CENTRALIZED = True
@@ -26,26 +26,28 @@ def is_exchange_information_valid(exchange_info: Dict[str, Any]) -> bool:
 
 
 class BitrueConfigMap(BaseConnectorConfigMap):
-    connector: str = "bitrue"
+    connector: str = Field(default="bitrue", const=True, client_data=None)
     bitrue_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Bitrue API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Bitrue API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
     bitrue_api_secret: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Bitrue API secret",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Bitrue API secret",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
-    model_config = ConfigDict(title="bitrue")
+
+    class Config:
+        title = "bitrue"
 
 
-KEYS = BitrueConfigMap.model_construct()
+KEYS = BitrueConfigMap.construct()

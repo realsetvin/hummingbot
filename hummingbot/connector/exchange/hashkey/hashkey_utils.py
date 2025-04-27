@@ -1,9 +1,9 @@
 from decimal import Decimal
 from typing import Any, Dict
 
-from pydantic import ConfigDict, Field, SecretStr
+from pydantic import Field, SecretStr
 
-from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
+from hummingbot.client.config.config_data_types import BaseConnectorConfigMap, ClientFieldData
 from hummingbot.core.data_type.trade_fee import TradeFeeSchema
 
 CENTRALIZED = True
@@ -24,29 +24,31 @@ def is_exchange_information_valid(exchange_info: Dict[str, Any]) -> bool:
 
 
 class HashkeyGlobalConfigMap(BaseConnectorConfigMap):
-    connector: str = "hashkey"
+    connector: str = Field(default="hashkey", const=True, client_data=None)
     hashkey_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Hashkey Global API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Hashkey Global API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
     hashkey_api_secret: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Hashkey Global API secret",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Hashkey Global API secret",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
-    model_config = ConfigDict(title="hashkey")
+
+    class Config:
+        title = "hashkey"
 
 
-KEYS = HashkeyGlobalConfigMap.model_construct()
+KEYS = HashkeyGlobalConfigMap.construct()
 
 OTHER_DOMAINS = ["hashkey_global_testnet"]
 OTHER_DOMAINS_PARAMETER = {
@@ -61,28 +63,30 @@ OTHER_DOMAINS_DEFAULT_FEES = {
 
 
 class HashkeyGlobalTestnetConfigMap(BaseConnectorConfigMap):
-    connector: str = "hashkey_global_testnet"
+    connector: str = Field(default="hashkey_global_testnet", const=True, client_data=None)
     hashkey_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Hashkey Global API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Hashkey Global API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
     hashkey_api_secret: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Hashkey Global API secret",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Hashkey Global API secret",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
-    model_config = ConfigDict(title="hashkey_global_testnet")
+
+    class Config:
+        title = "hashkey_global_testnet"
 
 
 OTHER_DOMAINS_KEYS = {
-    "hashkey_global_testnet": HashkeyGlobalTestnetConfigMap.model_construct(),
+    "hashkey_global_testnet": HashkeyGlobalTestnetConfigMap.construct(),
 }

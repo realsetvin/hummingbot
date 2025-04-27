@@ -154,8 +154,8 @@ def set_exchange_time_from_timestamp(timestamp: int | float, timestamp_unit: str
     elif timestamp_unit not in ("s", "second", "seconds"):
         raise ValueError(f"Unsupported timestamp unit {timestamp_unit}")
 
-    import datetime
-    return f"{datetime.datetime.fromtimestamp(timestamp, datetime.UTC).isoformat()}"
+    from datetime import datetime
+    return f"{datetime.utcfromtimestamp(timestamp).isoformat()}Z"
 
 
 def pair_to_symbol(pair: str) -> str:

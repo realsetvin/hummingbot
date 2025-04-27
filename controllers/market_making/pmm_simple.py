@@ -3,6 +3,7 @@ from typing import List
 
 from pydantic import Field
 
+from hummingbot.client.config.config_data_types import ClientFieldData
 from hummingbot.data_feed.candles_feed.data_types import CandlesConfig
 from hummingbot.strategy_v2.controllers.market_making_controller_base import (
     MarketMakingControllerBase,
@@ -12,9 +13,9 @@ from hummingbot.strategy_v2.executors.position_executor.data_types import Positi
 
 
 class PMMSimpleConfig(MarketMakingControllerConfigBase):
-    controller_name: str = "pmm_simple"
+    controller_name = "pmm_simple"
     # As this controller is a simple version of the PMM, we are not using the candles feed
-    candles_config: List[CandlesConfig] = Field(default=[])
+    candles_config: List[CandlesConfig] = Field(default=[], client_data=ClientFieldData(prompt_on_new=False))
 
 
 class PMMSimpleController(MarketMakingControllerBase):

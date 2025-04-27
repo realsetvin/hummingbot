@@ -2,8 +2,8 @@ import asyncio
 import hashlib
 import hmac
 import json
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
-from typing import Any, Dict, Optional
+import unittest
+from typing import Any, Awaitable, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import WSMessage, WSMsgType
@@ -28,13 +28,14 @@ class TestURLCreator(OMSConnectorURLCreatorBase):
         return "wss://some.url"
 
 
-class OMSConnectorUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
+class OMSConnectorUserStreamDataSourceTests(unittest.TestCase):
     # the level is required to receive logs from the data source logger
     level = 0
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.api_key = "someApiKey"
         cls.secret = "someSecret"
         cls.user_id = 20
@@ -51,12 +52,12 @@ class OMSConnectorUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         cls.account_id = 3
 
     @patch("hummingbot.core.utils.tracking_nonce.NonceCreator._time")
-    async def asyncSetUp(self, time_mock: MagicMock) -> None:
-        await super().asyncSetUp()
+    def setUp(self, time_mock: MagicMock) -> None:
+        super().setUp()
         time_mock.return_value = self.time_mock
         self.log_records = []
         self.listening_task: Optional[asyncio.Task] = None
-        self.mocking_assistant = NetworkMockingAssistant(self.local_event_loop)
+        self.mocking_assistant = NetworkMockingAssistant()
 
         self.auth = OMSConnectorAuth(api_key=self.api_key, secret_key=self.secret, user_id=self.user_id)
         self.initialize_auth()
@@ -86,6 +87,10 @@ class OMSConnectorUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
             for record in self.log_records
         )
 
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 1):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
+
     def initialize_auth(self):
         auth_resp = self.get_auth_success_response()
         self.auth.update_with_rest_response(auth_resp)
@@ -113,7 +118,7 @@ class OMSConnectorUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         return auth_resp
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_subscribes_to_orders_and_balances_events(self, ws_mock: AsyncMock):
+    def test_listen_for_user_stream_subscribes_to_orders_and_balances_events(self, ws_mock: AsyncMock):
         ws_mock.return_value = self.mocking_assistant.create_websocket_mock()
 
         subscribe_resp = {"m": 1, "i": 4, "n": "SubscribeAccountEvents", "o": json.dumps({"Subscribed": True})}
@@ -122,8 +127,8 @@ class OMSConnectorUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         )
 
         output_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_user_stream(output=output_queue))
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_mock.return_value)
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_user_stream(output=output_queue))
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_mock.return_value)
 
         expected_auth_message = {
             CONSTANTS.MSG_TYPE_FIELD: CONSTANTS.REQ_MSG_TYPE,
@@ -169,7 +174,7 @@ class OMSConnectorUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         )
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_ignores_non_events(self, ws_mock):
+    def test_listen_for_user_stream_ignores_non_events(self, ws_mock):
         ws_mock.return_value = self.mocking_assistant.create_websocket_mock()
 
         subscribe_resp = {"m": 1, "i": 4, "n": "SubscribeAccountEvents", "o": json.dumps({"Subscribed": True})}
@@ -215,8 +220,8 @@ class OMSConnectorUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         )
 
         output_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_user_stream(output=output_queue))
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_mock.return_value)
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_user_stream(output=output_queue))
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_mock.return_value)
 
         self.assertFalse(output_queue.empty())
 
@@ -232,7 +237,7 @@ class OMSConnectorUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(expected_update_resp, update_resp_received)
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_sends_ping_message_before_ping_interval_finishes(self, ws_mock):
+    def test_listen_for_user_stream_sends_ping_message_before_ping_interval_finishes(self, ws_mock):
         ws_mock.return_value = self.mocking_assistant.create_websocket_mock()
 
         subscribe_resp = {"m": 1, "i": 4, "n": "SubscribeAccountEvents", "o": json.dumps({"Subscribed": True})}
@@ -243,10 +248,10 @@ class OMSConnectorUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         ]
 
         msg_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_user_stream(msg_queue))
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_user_stream(msg_queue))
 
         try:
-            await self.listening_task
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 

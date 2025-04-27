@@ -1,9 +1,9 @@
 import asyncio
 import json
 import re
+import unittest
 from decimal import Decimal
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
-from typing import Optional
+from typing import Awaitable, Optional
 from unittest.mock import AsyncMock, patch
 
 from aioresponses import aioresponses
@@ -15,7 +15,7 @@ from hummingbot.core.rate_oracle.sources.coin_cap_rate_source import CoinCapRate
 from hummingbot.data_feed.coin_cap_data_feed import coin_cap_constants as CONSTANTS
 
 
-class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
+class CoinCapRateSourceTest(unittest.TestCase):
     level = 0
     target_token: str
     target_asset_id: str
@@ -30,14 +30,13 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
         cls.global_token = CONSTANTS.UNIVERSAL_QUOTE_TOKEN
         cls.trading_pair = combine_to_hb_trading_pair(base=cls.target_token, quote=cls.global_token)
 
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
+    def setUp(self) -> None:
+        super().setUp()
         self.log_records = []
         self.rate_source = CoinCapRateSource(assets_map={}, api_key="")
         self.rate_source._coin_cap_data_feed.logger().setLevel(1)
         self.rate_source._coin_cap_data_feed.logger().addHandler(self)
         self.mocking_assistant = NetworkMockingAssistant()
-        await self.mocking_assistant.async_init()
         self.rate_source._coin_cap_data_feed._get_api_factory()
         self._web_socket_mock = self.mocking_assistant.configure_web_assistants_factory(
             web_assistants_factory=self.rate_source._coin_cap_data_feed._api_factory
@@ -45,6 +44,11 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
 
     def handle(self, record):
         self.log_records.append(record)
+
+    @staticmethod
+    def async_run_with_timeout(coroutine: Awaitable, timeout: int = 1):
+        ret = asyncio.get_event_loop().run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
 
     def get_coin_cap_assets_data_mock(
         self,
@@ -88,7 +92,7 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
         return data
 
     @aioresponses()
-    async def test_get_prices(self, mock_api: aioresponses):
+    def test_get_prices(self, mock_api: aioresponses):
         expected_rate = Decimal("20")
 
         data = self.get_coin_cap_assets_data_mock(asset_symbol=self.target_token, asset_price=expected_rate)
@@ -103,21 +107,23 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
             },
         )
 
-        prices = await self.rate_source.get_prices(quote_token="SOMETOKEN")
+        prices = self.async_run_with_timeout(self.rate_source.get_prices(quote_token="SOMETOKEN"))
 
         self.assertEqual(prices, {})
 
-        prices = await self.rate_source.get_prices(quote_token=self.global_token)
+        prices = self.async_run_with_timeout(
+            coroutine=self.rate_source.get_prices(quote_token=self.global_token)
+        )
 
         self.assertIn(self.trading_pair, prices)
         self.assertEqual(expected_rate, prices[self.trading_pair])
 
     @aioresponses()
-    async def test_check_network(self, mock_api: aioresponses):
+    def test_check_network(self, mock_api: aioresponses):
         url = f"{CONSTANTS.BASE_REST_URL}{CONSTANTS.HEALTH_CHECK_ENDPOINT}"
         mock_api.get(url, exception=Exception())
 
-        status = await self.rate_source.check_network()
+        status = self.async_run_with_timeout(coroutine=self.rate_source.check_network())
         self.assertEqual(NetworkStatus.NOT_CONNECTED, status)
 
         mock_api.get(
@@ -129,11 +135,11 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
             },
         )
 
-        status = await self.rate_source.check_network()
+        status = self.async_run_with_timeout(coroutine=self.rate_source.check_network())
         self.assertEqual(NetworkStatus.CONNECTED, status)
 
     @aioresponses()
-    async def test_ws_stream_prices(self, mock_api: aioresponses):
+    def test_ws_stream_prices(self, mock_api: aioresponses):
         # initial request
         rest_rate = Decimal("20")
         data = self.get_coin_cap_assets_data_mock(asset_symbol=self.target_token, asset_price=rest_rate)
@@ -157,9 +163,11 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
             repeat=True,
         )
 
-        await rate_source.start_network()
+        self.async_run_with_timeout(coroutine=rate_source.start_network())
 
-        prices = await rate_source.get_prices(quote_token=self.global_token)
+        prices = self.async_run_with_timeout(
+            coroutine=rate_source.get_prices(quote_token=self.global_token)
+        )
 
         self.assertIn(self.trading_pair, prices)
         self.assertEqual(rest_rate, prices[self.trading_pair])
@@ -170,23 +178,27 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
             websocket_mock=web_socket_mock, message=json.dumps(stream_response)
         )
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(websocket_mock=web_socket_mock)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(websocket_mock=web_socket_mock)
 
-        prices = await rate_source.get_prices(quote_token=self.global_token)
+        prices = self.async_run_with_timeout(
+            coroutine=rate_source.get_prices(quote_token=self.global_token)
+        )
 
         self.assertIn(self.trading_pair, prices)
         self.assertEqual(streamed_rate, prices[self.trading_pair])
 
-        await rate_source.stop_network()
+        self.async_run_with_timeout(coroutine=rate_source.stop_network())
 
-        prices = await rate_source.get_prices(quote_token=self.global_token)
+        prices = self.async_run_with_timeout(
+            coroutine=rate_source.get_prices(quote_token=self.global_token)
+        )
 
         self.assertIn(self.trading_pair, prices)
         self.assertEqual(rest_rate, prices[self.trading_pair])  # rest requests are used once again
 
     @aioresponses()
     @patch("hummingbot.data_feed.coin_cap_data_feed.coin_cap_data_feed.CoinCapDataFeed._sleep")
-    async def test_ws_stream_logs_exceptions_and_restarts(self, mock_api: aioresponses, sleep_mock: AsyncMock):
+    def test_ws_stream_logs_exceptions_and_restarts(self, mock_api: aioresponses, sleep_mock: AsyncMock):
         continue_event = asyncio.Event()
 
         async def _continue_event_wait(*_, **__):
@@ -218,7 +230,7 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
             repeat=True,
         )
 
-        await rate_source.start_network()
+        self.async_run_with_timeout(coroutine=rate_source.start_network())
 
         streamed_rate = rest_rate + Decimal("1")
         stream_response = {self.target_asset_id: str(streamed_rate)}
@@ -229,9 +241,11 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
             websocket_mock=web_socket_mock, exception=Exception("test exception")
         )
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(websocket_mock=web_socket_mock)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(websocket_mock=web_socket_mock)
 
-        prices = await rate_source.get_prices(quote_token=self.global_token)
+        prices = self.async_run_with_timeout(
+            coroutine=rate_source.get_prices(quote_token=self.global_token)
+        )
 
         self.assertIn(self.trading_pair, prices)
         self.assertEqual(streamed_rate, prices[self.trading_pair])
@@ -250,9 +264,11 @@ class CoinCapRateSourceTest(IsolatedAsyncioWrapperTestCase):
 
         continue_event.set()
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(websocket_mock=web_socket_mock)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(websocket_mock=web_socket_mock)
 
-        prices = await rate_source.get_prices(quote_token=self.global_token)
+        prices = self.async_run_with_timeout(
+            coroutine=rate_source.get_prices(quote_token=self.global_token)
+        )
 
         self.assertIn(self.trading_pair, prices)
         self.assertEqual(streamed_rate, prices[self.trading_pair])

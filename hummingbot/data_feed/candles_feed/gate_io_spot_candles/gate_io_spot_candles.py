@@ -114,7 +114,7 @@ class GateioSpotCandles(CandlesBase):
 
     def ws_subscription_payload(self):
         return {
-            "time": int(self._time()),
+            "time": int(time.time()),
             "channel": CONSTANTS.WS_CANDLES_ENDPOINT,
             "event": "subscribe",
             "payload": [self.interval, self._ex_trading_pair]

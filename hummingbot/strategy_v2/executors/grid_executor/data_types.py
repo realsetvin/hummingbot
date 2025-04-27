@@ -1,8 +1,8 @@
 from decimal import Decimal
 from enum import Enum
-from typing import Literal, Optional
+from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 from hummingbot.core.data_type.common import OrderType, TradeType
 from hummingbot.strategy_v2.executors.data_types import ExecutorConfigBase
@@ -11,7 +11,7 @@ from hummingbot.strategy_v2.models.executors import TrackedOrder
 
 
 class GridExecutorConfig(ExecutorConfigBase):
-    type: Literal["grid_executor"] = "grid_executor"
+    type = "grid_executor"
     # Boundaries
     connector_name: str
     trading_pair: str
@@ -28,14 +28,12 @@ class GridExecutorConfig(ExecutorConfigBase):
     max_orders_per_batch: Optional[int] = None
     order_frequency: int = 0
     activation_bounds: Optional[Decimal] = None
-    safe_extra_spread: Decimal = Decimal("0.0001")
+    safe_extra_spread: Decimal = Decimal("0.0002")
     # Risk Management
     triple_barrier_config: TripleBarrierConfig
     leverage: int = 20
     level_id: Optional[str] = None
     deduct_base_fees: bool = False
-    keep_position: bool = False
-    coerce_tp_to_step: bool = False
 
 
 class GridLevelStates(Enum):
@@ -57,7 +55,9 @@ class GridLevel(BaseModel):
     active_open_order: Optional[TrackedOrder] = None
     active_close_order: Optional[TrackedOrder] = None
     state: GridLevelStates = GridLevelStates.NOT_ACTIVE
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    class Config:
+        arbitrary_types_allowed = True  # Allow arbitrary types
 
     def update_state(self):
         if self.active_open_order is None:

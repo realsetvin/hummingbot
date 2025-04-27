@@ -18,6 +18,7 @@ class TestKrakenSpotCandles(TestCandlesBase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "BTC"
         cls.quote_asset = "USDT"
         cls.interval = "1h"
@@ -28,18 +29,15 @@ class TestKrakenSpotCandles(TestCandlesBase):
 
     def setUp(self) -> None:
         super().setUp()
+        self.mocking_assistant = NetworkMockingAssistant()
         self.data_feed = KrakenSpotCandles(trading_pair=self.trading_pair, interval=self.interval)
 
         self.log_records = []
         self.data_feed.logger().setLevel(1)
         self.data_feed.logger().addHandler(self)
+        self.resume_test_event = asyncio.Event()
         self._time = int(time.time())
         self._interval_in_seconds = 3600
-
-    async def asyncSetUp(self):
-        await super().asyncSetUp()
-        self.mocking_assistant = NetworkMockingAssistant()
-        self.resume_test_event = asyncio.Event()
 
     def _candles_data_mock(self):
         return [[1716127200, '66934.0', '66951.8', '66800.0', '66901.6', '28.50228560', 1906800.0564114398, 0, 0, 0],
@@ -110,7 +108,7 @@ class TestKrakenSpotCandles(TestCandlesBase):
                                          connector_name=self.data_feed.name, trading_pair=self.trading_pair)
         with self.assertRaises(ValueError,
                                msg="Kraken REST API does not support fetching more than 720 candles ago."):
-            self.run_async_with_timeout(self.data_feed.get_historical_candles(config))
+            self.async_run_with_timeout(self.data_feed.get_historical_candles(config))
 
     @aioresponses()
     def test_fetch_candles(self, mock_api):
@@ -119,7 +117,7 @@ class TestKrakenSpotCandles(TestCandlesBase):
         mock_api.get(url=regex_url, body=json.dumps(data_mock))
         self.start_time = self._time - self._interval_in_seconds * 3
         self.end_time = self._time
-        candles = self.run_async_with_timeout(self.data_feed.fetch_candles(start_time=self.start_time,
+        candles = self.async_run_with_timeout(self.data_feed.fetch_candles(start_time=self.start_time,
                                                                            end_time=self.end_time,
                                                                            limit=4))
         self.assertEqual(len(candles), len(data_mock["result"][self.ex_trading_pair]))

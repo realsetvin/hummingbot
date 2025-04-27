@@ -16,6 +16,7 @@ class TestHyperliquidSpotC0andles(TestCandlesBase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "HFUN"
         cls.quote_asset = "USDC"
         cls.interval = "1h"
@@ -25,16 +26,13 @@ class TestHyperliquidSpotC0andles(TestCandlesBase):
 
     def setUp(self) -> None:
         super().setUp()
+        self.mocking_assistant = NetworkMockingAssistant()
         self.data_feed = HyperliquidSpotCandles(trading_pair=self.trading_pair, interval=self.interval)
         self.data_feed._coins_dict = {"USDC": 0, "HFUN": 1}
 
         self.log_records = []
         self.data_feed.logger().setLevel(1)
         self.data_feed.logger().addHandler(self)
-
-    async def asyncSetUp(self):
-        await super().asyncSetUp()
-        self.mocking_assistant = NetworkMockingAssistant()
         self.resume_test_event = asyncio.Event()
 
     def get_fetch_candles_data_mock(self):
@@ -152,7 +150,7 @@ class TestHyperliquidSpotC0andles(TestCandlesBase):
         data_mock = self.get_candles_rest_data_mock()
         mock_api.post(url=regex_url, body=json.dumps(data_mock))
 
-        resp = self.run_async_with_timeout(self.data_feed.fetch_candles(start_time=self.start_time,
+        resp = self.async_run_with_timeout(self.data_feed.fetch_candles(start_time=self.start_time,
                                                                         end_time=self.end_time))
 
         self.assertEqual(resp.shape[0], len(self.get_fetch_candles_data_mock()))
@@ -166,5 +164,5 @@ class TestHyperliquidSpotC0andles(TestCandlesBase):
     def test_initialize_coins_dict(self, mock_api):
         url = self.data_feed.rest_url
         mock_api.post(url=url, payload=self.get_universe_data_mock())
-        self.run_async_with_timeout(self.data_feed._initialize_coins_dict())
+        self.async_run_with_timeout(self.data_feed._initialize_coins_dict())
         self.assertEqual(self.data_feed._universe, self.get_universe_data_mock())

@@ -1,7 +1,7 @@
 import asyncio
 import json
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
-from typing import Optional
+import unittest
+from typing import Awaitable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import WSMsgType
@@ -17,20 +17,21 @@ from hummingbot.connector.exchange.bitmart.bitmart_exchange import BitmartExchan
 from hummingbot.connector.test_support.network_mocking_assistant import NetworkMockingAssistant
 
 
-class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
+class BitmartAPIUserStreamDataSourceTests(unittest.TestCase):
     # the level is required to receive logs from the data source logger
     level = 0
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "COINALPHA"
         cls.quote_asset = "HBOT"
         cls.trading_pair = f"{cls.base_asset}-{cls.quote_asset}"
         cls.ex_trading_pair = f"{cls.base_asset}_{cls.quote_asset}"
 
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
+    def setUp(self) -> None:
+        super().setUp()
         self.log_records = []
         self.listening_task: Optional[asyncio.Task] = None
         self.mocking_assistant = NetworkMockingAssistant()
@@ -74,6 +75,10 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
     def handle(self, record):
         self.log_records.append(record)
 
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: int = 1):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
+
     def _is_logged(self, log_level: str, message: str) -> bool:
         return any(record.levelname == log_level and record.getMessage() == message
                    for record in self.log_records)
@@ -82,7 +87,7 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         raise exception_class
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_subscribes_to_orders_events(self, ws_connect_mock):
+    def test_listen_for_user_stream_subscribes_to_orders_events(self, ws_connect_mock):
         ws_connect_mock.return_value = self.mocking_assistant.create_websocket_mock()
 
         successful_login_response = {"event": "login"}
@@ -100,9 +105,9 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         output_queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_user_stream(output=output_queue))
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_user_stream(output=output_queue))
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
 
         sent_messages = self.mocking_assistant.json_messages_sent_through_websocket(
             websocket_mock=ws_connect_mock.return_value)
@@ -128,7 +133,7 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         ))
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_logs_error_when_login_fails(self, ws_connect_mock):
+    def test_listen_for_user_stream_logs_error_when_login_fails(self, ws_connect_mock):
         ws_connect_mock.return_value = self.mocking_assistant.create_websocket_mock()
 
         erroneous_login_response = {"event": "login", "errorCode": "4001"}
@@ -139,9 +144,9 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         output_queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_user_stream(output=output_queue))
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_user_stream(output=output_queue))
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
 
         self.assertTrue(self._is_logged(
             "ERROR",
@@ -154,7 +159,7 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         ))
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_does_not_queue_invalid_payload(self, mock_ws):
+    def test_listen_for_user_stream_does_not_queue_invalid_payload(self, mock_ws):
         mock_ws.return_value = self.mocking_assistant.create_websocket_mock()
         successful_login_response = {"event": "login"}
         self.mocking_assistant.add_websocket_aiohttp_message(
@@ -181,7 +186,7 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
                     "filled_notional": "46100.0000000000",
                     "filled_size": "1.0000000000",
                     "margin_trading": "0",
-                    "order_state": "new",
+                    "state": "4",
                     "order_id": "2147857398",
                     "order_type": "0",
                     "last_fill_time": "1609926039226",
@@ -198,24 +203,27 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
             message=json.dumps(event_without_table))
 
         msg_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(
+        self.listening_task = self.ev_loop.create_task(
             self.data_source.listen_for_user_stream(msg_queue)
         )
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
 
         self.assertEqual(0, msg_queue.qsize())
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
     @patch("hummingbot.core.data_type.user_stream_tracker_data_source.UserStreamTrackerDataSource._sleep")
-    async def test_listen_for_user_stream_connection_failed(self, sleep_mock, mock_ws):
+    def test_listen_for_user_stream_connection_failed(self, sleep_mock, mock_ws):
         mock_ws.side_effect = Exception("TEST ERROR")
         sleep_mock.side_effect = asyncio.CancelledError
 
         msg_queue = asyncio.Queue()
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_user_stream(msg_queue)
+        )
 
         try:
-            await self.data_source.listen_for_user_stream(msg_queue)
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 
@@ -224,31 +232,37 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
                             "Unexpected error while listening to user stream. Retrying after 5 seconds..."))
 
     @patch('aiohttp.ClientSession.ws_connect', new_callable=AsyncMock)
-    async def test_listening_process_canceled_when_cancel_exception_during_initialization(self, ws_connect_mock):
+    def test_listening_process_canceled_when_cancel_exception_during_initialization(self, ws_connect_mock):
         messages = asyncio.Queue()
         ws_connect_mock.side_effect = asyncio.CancelledError
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_user_stream(messages)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_user_stream(messages))
+            self.ev_loop.run_until_complete(self.listening_task)
 
     @patch('aiohttp.ClientSession.ws_connect', new_callable=AsyncMock)
-    async def test_listening_process_canceled_when_cancel_exception_during_authentication(self, ws_connect_mock):
+    def test_listening_process_canceled_when_cancel_exception_during_authentication(self, ws_connect_mock):
         messages = asyncio.Queue()
         ws_connect_mock.return_value = self.mocking_assistant.create_websocket_mock()
         ws_connect_mock.return_value.receive.side_effect = asyncio.CancelledError
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_user_stream(messages)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_user_stream(messages))
+            self.ev_loop.run_until_complete(self.listening_task)
 
-    async def test_subscribe_channels_raises_cancel_exception(self):
+    def test_subscribe_channels_raises_cancel_exception(self):
         ws_assistant = AsyncMock()
         ws_assistant.send.side_effect = asyncio.CancelledError
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source._subscribe_channels(ws_assistant)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source._subscribe_channels(ws_assistant))
+            self.ev_loop.run_until_complete(self.listening_task)
 
     @patch('aiohttp.ClientSession.ws_connect', new_callable=AsyncMock)
     @patch("hummingbot.core.data_type.user_stream_tracker_data_source.UserStreamTrackerDataSource._sleep")
-    async def test_listening_process_logs_exception_during_events_subscription(self, sleep_mock, mock_ws):
+    def test_listening_process_logs_exception_during_events_subscription(self, sleep_mock, mock_ws):
         # This is to force a KeyError in _subscribe_channels
         self.connector._set_trading_pair_symbol_map(bidict({'some-pair': 'some-pair'}))
 
@@ -259,8 +273,12 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.mocking_assistant.add_websocket_aiohttp_message(
             mock_ws.return_value,
             json.dumps({"event": "login"}))
+
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_user_stream(messages))
+
         try:
-            await self.data_source.listen_for_user_stream(messages)
+            self.async_run_with_timeout(self.listening_task, timeout=3)
         except asyncio.CancelledError:
             pass
 
@@ -272,7 +290,7 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
             "Unexpected error while listening to user stream. Retrying after 5 seconds..."))
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_processes_order_event(self, mock_ws):
+    def test_listen_for_user_stream_processes_order_event(self, mock_ws):
         mock_ws.return_value = self.mocking_assistant.create_websocket_mock()
         successful_login_response = {"event": "login"}
         self.mocking_assistant.add_websocket_aiohttp_message(
@@ -292,7 +310,7 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
                     "filled_notional": "46100.0000000000",
                     "filled_size": "1.0000000000",
                     "margin_trading": "0",
-                    "Order_state": "new",
+                    "state": "4",
                     "order_id": "2147857398",
                     "order_type": "0",
                     "last_fill_time": "1609926039226",
@@ -310,18 +328,18 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
             message=json.dumps(order_event))
 
         msg_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(
+        self.listening_task = self.ev_loop.create_task(
             self.data_source.listen_for_user_stream(msg_queue)
         )
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
 
         self.assertEqual(1, msg_queue.qsize())
         order_event_message = msg_queue.get_nowait()
         self.assertEqual(order_event, order_event_message)
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_processes_compressed_order_event(self, mock_ws):
+    def test_listen_for_user_stream_processes_compressed_order_event(self, mock_ws):
         mock_ws.return_value = self.mocking_assistant.create_websocket_mock()
         successful_login_response = {"event": "login"}
         self.mocking_assistant.add_websocket_aiohttp_message(
@@ -341,7 +359,7 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
                     "filled_notional": "46100.0000000000",
                     "filled_size": "1.0000000000",
                     "margin_trading": "0",
-                    "order_state": "new",
+                    "state": "4",
                     "order_id": "2147857398",
                     "order_type": "0",
                     "last_fill_time": "1609926039226",
@@ -360,18 +378,18 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
             message_type=WSMsgType.BINARY)
 
         msg_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(
+        self.listening_task = self.ev_loop.create_task(
             self.data_source.listen_for_user_stream(msg_queue)
         )
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
 
         self.assertEqual(1, msg_queue.qsize())
         order_event_message = msg_queue.get_nowait()
         self.assertEqual(order_event, order_event_message)
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_logs_details_for_order_event_with_errors(self, mock_ws):
+    def test_listen_for_user_stream_logs_details_for_order_event_with_errors(self, mock_ws):
         mock_ws.return_value = self.mocking_assistant.create_websocket_mock()
         successful_login_response = {"event": "login"}
         self.mocking_assistant.add_websocket_aiohttp_message(
@@ -393,7 +411,7 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
                     "filled_notional": "46100.0000000000",
                     "filled_size": "1.0000000000",
                     "margin_trading": "0",
-                    "order_state": "new",
+                    "state": "4",
                     "order_id": "2147857398",
                     "order_type": "0",
                     "last_fill_time": "1609926039226",
@@ -411,11 +429,11 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
             message=json.dumps(order_event))
 
         msg_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(
+        self.listening_task = self.ev_loop.create_task(
             self.data_source.listen_for_user_stream(msg_queue)
         )
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
 
         self.assertEqual(0, msg_queue.qsize())
 
@@ -425,7 +443,7 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
         ))
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_logs_details_for_invalid_event_message(self, mock_ws):
+    def test_listen_for_user_stream_logs_details_for_invalid_event_message(self, mock_ws):
         mock_ws.return_value = self.mocking_assistant.create_websocket_mock()
         successful_login_response = {"event": "login"}
         self.mocking_assistant.add_websocket_aiohttp_message(
@@ -437,11 +455,11 @@ class BitmartAPIUserStreamDataSourceTests(IsolatedAsyncioWrapperTestCase):
             message="invalid message content")
 
         msg_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(
+        self.listening_task = self.ev_loop.create_task(
             self.data_source.listen_for_user_stream(msg_queue)
         )
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
 
         self.assertEqual(0, msg_queue.qsize())
 

@@ -1,7 +1,8 @@
 import asyncio
 import time
+import unittest
 from decimal import Decimal
-from unittest.async_case import IsolatedAsyncioTestCase
+from typing import Awaitable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from xrpl.asyncio.clients import XRPLRequestFailureException
@@ -25,13 +26,14 @@ from hummingbot.core.data_type.order_book_tracker import OrderBookTracker
 from hummingbot.core.data_type.user_stream_tracker import UserStreamTracker
 
 
-class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
+class XRPLAPIOrderBookDataSourceUnitTests(unittest.TestCase):
     # logging.Level required to receive logs from the data source logger
     level = 0
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "SOLO"
         cls.quote_asset = "XRP"
         cls.trading_pair = f"{cls.base_asset}-{cls.quote_asset}"
@@ -52,16 +54,11 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             trading_pairs=[self.trading_pair, self.trading_pair_usd],
             trading_required=False,
         )
-
-        self.connector._sleep = AsyncMock()
-
         self.data_source = XRPLAPIOrderBookDataSource(
             trading_pairs=[self.trading_pair, self.trading_pair_usd],
             connector=self.connector,
             api_factory=self.connector._web_assistants_factory,
         )
-
-        self.data_source._sleep = MagicMock()
         self.data_source.logger().setLevel(1)
         self.data_source.logger().addHandler(self)
         self.data_source._request_order_book_snapshot = AsyncMock()
@@ -153,6 +150,10 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     def _create_exception_and_unlock_test_with_event(self, exception):
         self.resume_test_event.set()
         raise exception
+
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 5):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
 
     def _trade_update_event(self):
         trade_data = {
@@ -945,8 +946,8 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
         return resp
 
-    async def test_get_new_order_book_successful(self):
-        await self.connector._orderbook_ds.get_new_order_book(self.trading_pair)
+    def test_get_new_order_book_successful(self):
+        self.async_run_with_timeout(self.connector._orderbook_ds.get_new_order_book(self.trading_pair))
         order_book: OrderBook = self.connector.get_order_book(self.trading_pair)
 
         bids = list(order_book.bid_entries())
@@ -964,7 +965,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_sign")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_submit")
     @patch("hummingbot.connector.client_order_tracker.ClientOrderTracker.process_order_update")
-    async def test_place_limit_order(
+    def test_place_limit_order(
         self,
         process_order_update_mock,
         submit_mock,
@@ -987,37 +988,49 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             status=ResponseStatus.SUCCESS, result={"engine_result": "tesSUCCESS", "engine_result_message": "something"}
         )
 
-        await self.connector._place_order(
-            "hbot",
-            self.trading_pair,
-            Decimal("12345.12345678901234567"),
-            TradeType.BUY,
-            OrderType.LIMIT,
-            Decimal("1"))
+        self.async_run_with_timeout(
+            self.connector._place_order(
+                "hbot",
+                self.trading_pair,
+                Decimal("12345.12345678901234567"),
+                TradeType.BUY,
+                OrderType.LIMIT,
+                Decimal("1"),
+            )
+        )
 
-        await self.connector._place_order(
-            "hbot",
-            self.trading_pair,
-            Decimal("12345.12345678901234567"),
-            TradeType.SELL,
-            OrderType.LIMIT,
-            Decimal("1234567.123456789"))
+        self.async_run_with_timeout(
+            self.connector._place_order(
+                "hbot",
+                self.trading_pair,
+                Decimal("12345.12345678901234567"),
+                TradeType.SELL,
+                OrderType.LIMIT,
+                Decimal("1234567.123456789"),
+            )
+        )
 
-        await self.connector._place_order(
-            "hbot",
-            self.trading_pair_usd,
-            Decimal("12345.12345678901234567"),
-            TradeType.BUY,
-            OrderType.LIMIT,
-            Decimal("1234567.123456789"))
+        self.async_run_with_timeout(
+            self.connector._place_order(
+                "hbot",
+                self.trading_pair_usd,
+                Decimal("12345.12345678901234567"),
+                TradeType.BUY,
+                OrderType.LIMIT,
+                Decimal("1234567.123456789"),
+            )
+        )
 
-        await self.connector._place_order(
-            "hbot",
-            self.trading_pair_usd,
-            Decimal("12345.12345678901234567"),
-            TradeType.SELL,
-            OrderType.LIMIT,
-            Decimal("1234567.123456789"))
+        self.async_run_with_timeout(
+            self.connector._place_order(
+                "hbot",
+                self.trading_pair_usd,
+                Decimal("12345.12345678901234567"),
+                TradeType.SELL,
+                OrderType.LIMIT,
+                Decimal("1234567.123456789"),
+            )
+        )
 
         order_id = self.connector.buy(
             self.trading_pair_usd,
@@ -1049,7 +1062,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_sign")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_submit")
     @patch("hummingbot.connector.client_order_tracker.ClientOrderTracker.process_order_update")
-    async def test_place_market_order(
+    def test_place_market_order(
         self,
         process_order_update_mock,
         submit_mock,
@@ -1087,13 +1100,29 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             return_value=MockGetPriceReturn(result_price=Decimal("1"))
         )
 
-        await self.connector._place_order("hbot", self.trading_pair, Decimal("1"), TradeType.BUY, OrderType.MARKET, Decimal("1"))
+        self.async_run_with_timeout(
+            self.connector._place_order(
+                "hbot", self.trading_pair, Decimal("1"), TradeType.BUY, OrderType.MARKET, Decimal("1")
+            )
+        )
 
-        await self.connector._place_order("hbot", self.trading_pair, Decimal("1"), TradeType.SELL, OrderType.MARKET, Decimal("1"))
+        self.async_run_with_timeout(
+            self.connector._place_order(
+                "hbot", self.trading_pair, Decimal("1"), TradeType.SELL, OrderType.MARKET, Decimal("1")
+            )
+        )
 
-        await self.connector._place_order("hbot", self.trading_pair_usd, Decimal("1"), TradeType.BUY, OrderType.MARKET, Decimal("1"))
+        self.async_run_with_timeout(
+            self.connector._place_order(
+                "hbot", self.trading_pair_usd, Decimal("1"), TradeType.BUY, OrderType.MARKET, Decimal("1")
+            )
+        )
 
-        await self.connector._place_order("hbot", self.trading_pair_usd, Decimal("1"), TradeType.SELL, OrderType.MARKET, Decimal("1"))
+        self.async_run_with_timeout(
+            self.connector._place_order(
+                "hbot", self.trading_pair_usd, Decimal("1"), TradeType.SELL, OrderType.MARKET, Decimal("1")
+            )
+        )
 
         order_id = self.connector.buy(
             self.trading_pair_usd,
@@ -1121,15 +1150,18 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.autofill", new_callable=MagicMock)
     # @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.submit", new_callable=MagicMock)
-    async def test_place_order_exception_handling_not_found_market(self, autofill_mock):
+    def test_place_order_exception_handling_not_found_market(self, autofill_mock):
         with self.assertRaises(Exception) as context:
-            await self.connector._place_order(
-                order_id="test_order",
-                trading_pair="NOT_FOUND",
-                amount=Decimal("1.0"),
-                trade_type=TradeType.BUY,
-                order_type=OrderType.MARKET,
-                price=Decimal("1"))
+            self.async_run_with_timeout(
+                self.connector._place_order(
+                    order_id="test_order",
+                    trading_pair="NOT_FOUND",
+                    amount=Decimal("1.0"),
+                    trade_type=TradeType.BUY,
+                    order_type=OrderType.MARKET,
+                    price=Decimal("1"),
+                )
+            )
 
         # Verify the exception was raised and contains the expected message
         self.assertTrue("Market NOT_FOUND not found in markets list" in str(context.exception))
@@ -1137,7 +1169,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch('hummingbot.connector.exchange.xrpl.xrpl_exchange.AsyncWebsocketClient')
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.autofill", new_callable=MagicMock)
     # @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.submit", new_callable=MagicMock)
-    async def test_place_order_exception_handling_autofill(self, autofill_mock, mock_async_websocket_client):
+    def test_place_order_exception_handling_autofill(self, autofill_mock, mock_async_websocket_client):
         # Create a mock client to be returned by the context manager
         mock_client = AsyncMock()
         mock_async_websocket_client.return_value.__aenter__.return_value = mock_client
@@ -1146,13 +1178,16 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         autofill_mock.side_effect = Exception("Test exception during autofill")
 
         with self.assertRaises(Exception) as context:
-            await self.connector._place_order(
-                order_id="test_order",
-                trading_pair="SOLO-XRP",
-                amount=Decimal("1.0"),
-                trade_type=TradeType.BUY,
-                order_type=OrderType.MARKET,
-                price=Decimal("1"))
+            self.async_run_with_timeout(
+                self.connector._place_order(
+                    order_id="test_order",
+                    trading_pair="SOLO-XRP",
+                    amount=Decimal("1.0"),
+                    trade_type=TradeType.BUY,
+                    order_type=OrderType.MARKET,
+                    price=Decimal("1"),
+                )
+            )
 
         # Verify the exception was raised and contains the expected message
         self.assertTrue(
@@ -1167,7 +1202,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_submit")
     @patch("hummingbot.connector.client_order_tracker.ClientOrderTracker.process_order_update")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
-    async def test_place_order_exception_handling_failed_verify(
+    def test_place_order_exception_handling_failed_verify(
         self,
         network_mock,
         process_order_update_mock,
@@ -1193,13 +1228,16 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(Exception) as context:
-            await self.connector._place_order(
-                "hbot",
-                self.trading_pair_usd,
-                Decimal("12345.12345678901234567"),
-                TradeType.SELL,
-                OrderType.LIMIT,
-                Decimal("1234567.123456789"))
+            self.async_run_with_timeout(
+                self.connector._place_order(
+                    "hbot",
+                    self.trading_pair_usd,
+                    Decimal("12345.12345678901234567"),
+                    TradeType.SELL,
+                    OrderType.LIMIT,
+                    Decimal("1234567.123456789"),
+                )
+            )
 
         # # Verify the exception was raised and contains the expected message
         self.assertTrue(
@@ -1215,7 +1253,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_submit")
     @patch("hummingbot.connector.client_order_tracker.ClientOrderTracker.process_order_update")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
-    async def test_place_order_exception_handling_none_verify_resp(
+    def test_place_order_exception_handling_none_verify_resp(
         self,
         network_mock,
         process_order_update_mock,
@@ -1241,13 +1279,16 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(Exception) as context:
-            await self.connector._place_order(
-                "hbot",
-                self.trading_pair_usd,
-                Decimal("12345.12345678901234567"),
-                TradeType.SELL,
-                OrderType.LIMIT,
-                Decimal("1234567.123456789"))
+            self.async_run_with_timeout(
+                self.connector._place_order(
+                    "hbot",
+                    self.trading_pair_usd,
+                    Decimal("12345.12345678901234567"),
+                    TradeType.SELL,
+                    OrderType.LIMIT,
+                    Decimal("1234567.123456789"),
+                )
+            )
 
         # # Verify the exception was raised and contains the expected message
         self.assertTrue("Order 1-1 (hbot) creation failed: Failed to place order hbot (1-1)" in str(context.exception))
@@ -1260,7 +1301,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_submit")
     @patch("hummingbot.connector.client_order_tracker.ClientOrderTracker.process_order_update")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
-    async def test_place_order_exception_handling_failed_submit(
+    def test_place_order_exception_handling_failed_submit(
         self,
         network_mock,
         process_order_update_mock,
@@ -1286,13 +1327,16 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(Exception) as context:
-            await self.connector._place_order(
-                "hbot",
-                self.trading_pair_usd,
-                Decimal("12345.12345678901234567"),
-                TradeType.SELL,
-                OrderType.LIMIT,
-                Decimal("1234567.123456789"))
+            self.async_run_with_timeout(
+                self.connector._place_order(
+                    "hbot",
+                    self.trading_pair_usd,
+                    Decimal("12345.12345678901234567"),
+                    TradeType.SELL,
+                    OrderType.LIMIT,
+                    Decimal("1234567.123456789"),
+                )
+            )
 
         # # Verify the exception was raised and contains the expected message
         self.assertTrue("Order 1-1 (hbot) creation failed: Failed to place order hbot (1-1)" in str(context.exception))
@@ -1301,7 +1345,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_autofill")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_sign")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.tx_submit")
-    async def test_place_cancel(
+    def test_place_cancel(
         self,
         submit_mock,
         sign_mock,
@@ -1331,7 +1375,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             creation_timestamp=1,
         )
 
-        await self.connector._place_cancel("hbot", tracked_order=in_flight_order)
+        self.async_run_with_timeout(self.connector._place_cancel("hbot", tracked_order=in_flight_order))
         self.assertTrue(submit_mock.called)
         self.assertTrue(autofill_mock.called)
         self.assertTrue(sign_mock.called)
@@ -1345,7 +1389,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.client_order_tracker.ClientOrderTracker.process_trade_update")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.process_trade_fills")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._request_order_status")
-    async def test_place_order_and_process_update(
+    def test_place_order_and_process_update(
         self,
         request_order_status_mock,
         process_trade_fills_mock,
@@ -1388,7 +1432,9 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             creation_timestamp=1,
         )
 
-        exchange_order_id = await self.connector._place_order_and_process_update(order=in_flight_order)
+        exchange_order_id = self.async_run_with_timeout(
+            self.connector._place_order_and_process_update(order=in_flight_order)
+        )
         self.assertTrue(submit_mock.called)
         self.assertTrue(autofill_mock.called)
         self.assertTrue(sign_mock.called)
@@ -1405,7 +1451,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.client_order_tracker.ClientOrderTracker.process_order_update")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._request_order_status")
-    async def test_execute_order_cancel_and_process_update(
+    def test_execute_order_cancel_and_process_update(
         self,
         request_order_status_mock,
         network_mock,
@@ -1448,7 +1494,10 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             price=Decimal("1"),
             creation_timestamp=1,
         )
-        result = await self.connector._execute_order_cancel_and_process_update(order=in_flight_order)
+
+        result = self.async_run_with_timeout(
+            self.connector._execute_order_cancel_and_process_update(order=in_flight_order)
+        )
         self.assertTrue(process_order_update_mock.called)
         self.assertTrue(result)
 
@@ -1458,7 +1507,9 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             update_timestamp=1,
         )
 
-        result = await self.connector._execute_order_cancel_and_process_update(order=in_flight_order)
+        result = self.async_run_with_timeout(
+            self.connector._execute_order_cancel_and_process_update(order=in_flight_order)
+        )
         self.assertTrue(process_order_update_mock.called)
         self.assertTrue(result)
 
@@ -1484,7 +1535,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         self.assertEqual(result[0].min_base_amount_increment, expected_result[0].min_base_amount_increment)
         self.assertEqual(result[0].min_notional_size, expected_result[0].min_notional_size)
 
-    async def test_format_trading_pair_fee_rules(self):
+    def test_format_trading_pair_fee_rules(self):
         trading_rules_info = {"XRP-USD": {"base_transfer_rate": 0.01, "quote_transfer_rate": 0.01}}
 
         result = self.connector._format_trading_pair_fee_rules(trading_rules_info)
@@ -1506,7 +1557,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.exchange.xrpl.xrpl_auth.XRPLAuth.get_account")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._update_balances")
     @patch("hummingbot.connector.client_order_tracker.ClientOrderTracker.process_order_update")
-    async def test_user_stream_event_listener(
+    def test_user_stream_event_listener(
         self,
         process_order_update_mock,
         update_balances_mock,
@@ -1536,7 +1587,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         get_order_by_sequence.return_value = in_flight_order
         get_account_mock.return_value = "r2XdzWFVoHGfGVmXugtKhxMu3bqhsYiWK"  # noqa: mock
 
-        await self.connector._user_stream_event_listener()
+        self.async_run_with_timeout(self.connector._user_stream_event_listener())
         self.assertTrue(update_balances_mock.called)
         self.assertTrue(get_account_mock.called)
         self.assertTrue(get_order_by_sequence.called)
@@ -1550,7 +1601,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.exchange.xrpl.xrpl_auth.XRPLAuth.get_account")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._update_balances")
     @patch("hummingbot.connector.client_order_tracker.ClientOrderTracker.process_order_update")
-    async def test_user_stream_event_listener_partially_filled(
+    def test_user_stream_event_listener_partially_filled(
         self,
         process_order_update_mock,
         update_balances_mock,
@@ -1580,7 +1631,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         get_order_by_sequence.return_value = in_flight_order
         get_account_mock.return_value = "r2XdzWFVoHGfGVmXugtKhxMu3bqhsYiWK"  # noqa: mock
 
-        await self.connector._user_stream_event_listener()
+        self.async_run_with_timeout(self.connector._user_stream_event_listener())
         self.assertTrue(update_balances_mock.called)
         self.assertTrue(get_account_mock.called)
         self.assertTrue(get_order_by_sequence.called)
@@ -1591,7 +1642,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_auth.XRPLAuth.get_account")
-    async def test_update_balances(self, get_account_mock, network_mock):
+    def test_update_balances(self, get_account_mock, network_mock):
         get_account_mock.return_value = "r2XdzWFVoHGfGVmXugtKhxMu3bqhsYiWK"  # noqa: mock
 
         def side_effect_function(arg: Request):
@@ -1606,7 +1657,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
         self.connector._xrpl_query_client.request.side_effect = side_effect_function
 
-        await self.connector._update_balances()
+        self.async_run_with_timeout(self.connector._update_balances())
 
         self.assertTrue(get_account_mock.called)
 
@@ -1618,7 +1669,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         self.assertEqual(self.connector._account_available_balances["USD"], Decimal("0.011094399237562"))
         self.assertEqual(self.connector._account_available_balances["SOLO"], Decimal("31.337975848655761"))
 
-    async def test_make_trading_rules_request(self):
+    def test_make_trading_rules_request(self):
         def side_effect_function(arg: Request):
             if arg.method == RequestMethod.ACCOUNT_INFO:
                 return self._client_response_account_info_issuer()
@@ -1627,7 +1678,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
         self.connector._xrpl_query_client.request.side_effect = side_effect_function
 
-        result = await self.connector._make_trading_rules_request()
+        result = self.async_run_with_timeout(self.connector._make_trading_rules_request())
 
         self.assertEqual(
             result["SOLO-XRP"]["base_currency"].currency, "534F4C4F00000000000000000000000000000000"
@@ -1639,7 +1690,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         self.assertEqual(result["SOLO-XRP"]["quote_transfer_rate"], 0)
         self.assertEqual(result["SOLO-XRP"]["minimum_order_size"], 1e-06)
 
-        await self.connector._update_trading_rules()
+        self.async_run_with_timeout(self.connector._update_trading_rules())
         trading_rule = self.connector.trading_rules["SOLO-XRP"]
         self.assertEqual(
             trading_rule.min_order_size,
@@ -1653,27 +1704,32 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.wait_for_final_transaction_outcome")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
-    async def test_verify_transaction_success(self, network_check_mock, wait_for_outcome_mock):
+    def test_verify_transaction_success(self, network_check_mock, wait_for_outcome_mock):
         wait_for_outcome_mock.return_value = Response(status=ResponseStatus.SUCCESS, result={})
         transaction_mock = MagicMock()
         transaction_mock.get_hash.return_value = "hash"
         transaction_mock.last_ledger_sequence = 12345
 
-        result, response = await self.connector._verify_transaction_result({"transaction": transaction_mock, "prelim_result": "tesSUCCESS"})
+        result, response = self.async_run_with_timeout(
+            self.connector._verify_transaction_result({"transaction": transaction_mock, "prelim_result": "tesSUCCESS"})
+        )
         self.assertTrue(result)
         self.assertIsNotNone(response)
 
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.wait_for_final_transaction_outcome")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
-    async def test_verify_transaction_exception(self, network_check_mock, wait_for_outcome_mock):
+    def test_verify_transaction_exception(self, network_check_mock, wait_for_outcome_mock):
         wait_for_outcome_mock.side_effect = Exception("Test exception")
         transaction_mock = MagicMock()
         transaction_mock.get_hash.return_value = "hash"
         transaction_mock.last_ledger_sequence = 12345
 
         with self.assertLogs(level="ERROR") as log:
-            result, response = await self.connector._verify_transaction_result(
-                {"transaction": transaction_mock, "prelim_result": "tesSUCCESS"})
+            result, response = self.async_run_with_timeout(
+                self.connector._verify_transaction_result(
+                    {"transaction": transaction_mock, "prelim_result": "tesSUCCESS"}
+                )
+            )
 
         log_output = log.output[0]
         self.assertEqual(
@@ -1681,9 +1737,11 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             "ERROR:hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange:Submitted transaction failed: Test exception",
         )
 
-    async def test_verify_transaction_exception_none_transaction(self):
+    def test_verify_transaction_exception_none_transaction(self):
         with self.assertLogs(level="ERROR") as log:
-            await self.connector._verify_transaction_result({"transaction": None, "prelim_result": "tesSUCCESS"})
+            self.async_run_with_timeout(
+                self.connector._verify_transaction_result({"transaction": None, "prelim_result": "tesSUCCESS"})
+            )
 
         log_output = log.output[0]
         self.assertEqual(
@@ -1693,23 +1751,38 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
         self.connector.wait_for_final_transaction_outcome = AsyncMock()
         self.connector.wait_for_final_transaction_outcome.side_effect = TimeoutError
+        self.connector._sleep = AsyncMock()
+
         with self.assertLogs(level="ERROR") as log:
-            await self.connector._verify_transaction_result(
-                {
-                    "transaction": Transaction(account="r1234", transaction_type=TransactionType.ACCOUNT_SET),  # noqa: mock
-                    "prelim_result": "tesSUCCESS"
-                })
+            self.async_run_with_timeout(
+                self.connector._verify_transaction_result(
+                    {
+                        "transaction": Transaction(
+                            account="r1234", transaction_type=TransactionType.ACCOUNT_SET
+                        ),  # noqa: mock
+                        "prelim_result": "tesSUCCESS",
+                    }
+                )
+            )
 
         log_output = log.output[0]
-        self.assertEqual(log_output,
-                         "ERROR:hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange:Max retries reached. Verify transaction failed due to timeout.",)
+        self.assertEqual(
+            log_output,
+            "ERROR:hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange:Max retries reached. Verify transaction failed due to timeout.",
+        )
 
         with self.assertLogs(level="ERROR") as log:
-            await self.connector._verify_transaction_result(
-                {
-                    "transaction": Transaction(account="r1234", transaction_type=TransactionType.ACCOUNT_SET),  # noqa: mock
-                    "prelim_result": "tesSUCCESS"},
-                try_count=CONSTANTS.VERIFY_TRANSACTION_MAX_RETRY)
+            self.async_run_with_timeout(
+                self.connector._verify_transaction_result(
+                    {
+                        "transaction": Transaction(
+                            account="r1234", transaction_type=TransactionType.ACCOUNT_SET
+                        ),  # noqa: mock
+                        "prelim_result": "tesSUCCESS",
+                    },
+                    try_count=CONSTANTS.VERIFY_TRANSACTION_MAX_RETRY,
+                )
+            )
 
         log_output = log.output[0]
         self.assertEqual(
@@ -1719,14 +1792,16 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.wait_for_final_transaction_outcome")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
-    async def test_verify_transaction_exception_none_prelim(self, network_check_mock, wait_for_outcome_mock):
+    def test_verify_transaction_exception_none_prelim(self, network_check_mock, wait_for_outcome_mock):
         wait_for_outcome_mock.side_effect = Exception("Test exception")
         transaction_mock = MagicMock()
         transaction_mock.get_hash.return_value = "hash"
         transaction_mock.last_ledger_sequence = 12345
 
         with self.assertLogs(level="ERROR") as log:
-            result, response = await self.connector._verify_transaction_result({"transaction": transaction_mock, "prelim_result": None})
+            result, response = self.async_run_with_timeout(
+                self.connector._verify_transaction_result({"transaction": transaction_mock, "prelim_result": None})
+            )
 
         log_output = log.output[0]
         self.assertEqual(
@@ -1734,7 +1809,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             "ERROR:hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange:Failed to verify transaction result, prelim_result is None",
         )
 
-    async def test_get_order_by_sequence_order_found(self):
+    def test_get_order_by_sequence_order_found(self):
         # Setup
         sequence = "84437895"
         order = InFlightOrder(
@@ -1758,7 +1833,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.client_order_id, "hbot")
 
-    async def test_get_order_by_sequence_order_not_found(self):
+    def test_get_order_by_sequence_order_not_found(self):
         # Setup
         sequence = "100"
 
@@ -1768,7 +1843,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         # Assert
         self.assertIsNone(result)
 
-    async def test_get_order_by_sequence_order_without_exchange_id(self):
+    def test_get_order_by_sequence_order_without_exchange_id(self):
         # Setup
         order = InFlightOrder(
             client_order_id="test_order",
@@ -1793,7 +1868,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
     @patch("hummingbot.connector.exchange.xrpl.xrpl_auth.XRPLAuth.get_account")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._fetch_account_transactions")
-    async def test_request_order_status(self, fetch_account_transactions_mock, network_check_mock, get_account_mock):
+    def test_request_order_status(self, fetch_account_transactions_mock, network_check_mock, get_account_mock):
         transactions = [
             {
                 "meta": {
@@ -2220,7 +2295,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             creation_timestamp=1719868942.0,
         )
 
-        order_update = await self.connector._request_order_status(in_flight_order)
+        order_update = self.async_run_with_timeout(self.connector._request_order_status(in_flight_order))
 
         self.assertEqual(
             order_update.client_order_id,
@@ -2240,12 +2315,12 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             creation_timestamp=1719868942.0,
         )
 
-        order_update = await self.connector._request_order_status(in_flight_order)
+        order_update = self.async_run_with_timeout(self.connector._request_order_status(in_flight_order))
         self.assertEqual(order_update.new_state, OrderState.FILLED)
 
         fetch_account_transactions_mock.return_value = []
 
-        order_update = await self.connector._request_order_status(in_flight_order)
+        order_update = self.async_run_with_timeout(self.connector._request_order_status(in_flight_order))
         self.assertEqual(order_update.new_state, OrderState.PENDING_CREATE)
 
         in_flight_order = InFlightOrder(
@@ -2259,7 +2334,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             creation_timestamp=1719868942.0,
         )
 
-        order_update = await self.connector._request_order_status(in_flight_order)
+        order_update = self.async_run_with_timeout(self.connector._request_order_status(in_flight_order))
         self.assertEqual(order_update.new_state, OrderState.FAILED)
 
         in_flight_order = InFlightOrder(
@@ -2273,7 +2348,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             creation_timestamp=time.time(),
         )
 
-        order_update = await self.connector._request_order_status(in_flight_order)
+        order_update = self.async_run_with_timeout(self.connector._request_order_status(in_flight_order))
         self.assertEqual(order_update.new_state, OrderState.PENDING_CREATE)
 
         in_flight_order = InFlightOrder(
@@ -2287,13 +2362,13 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         )
 
         in_flight_order.current_state = OrderState.PENDING_CREATE
-        order_update = await self.connector._request_order_status(in_flight_order)
+        order_update = self.async_run_with_timeout(self.connector._request_order_status(in_flight_order))
         self.assertEqual(order_update.new_state, OrderState.PENDING_CREATE)
 
     @patch("hummingbot.connector.exchange.xrpl.xrpl_auth.XRPLAuth.get_account")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._make_network_check_request")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange._fetch_account_transactions")
-    async def test_get_trade_fills(self, fetch_account_transactions_mock, network_check_mock, get_account_mock):
+    def test_get_trade_fills(self, fetch_account_transactions_mock, network_check_mock, get_account_mock):
         transactions = [
             {
                 "meta": {
@@ -2546,7 +2621,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         fetch_account_transactions_mock.return_value = transactions
         get_account_mock.return_value = "r2XdzWFVoHGfGVmXugtKhxMu3bqhsYiWK"  # noqa: mock
 
-        trade_fills = await self.connector._all_trade_updates_for_order(in_flight_order)
+        trade_fills = self.async_run_with_timeout(self.connector._all_trade_updates_for_order(in_flight_order))
 
         self.assertEqual(len(trade_fills), 1)
         self.assertEqual(
@@ -2821,7 +2896,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             creation_timestamp=1718906078.0,
         )
 
-        trade_fills = await self.connector._all_trade_updates_for_order(in_flight_order)
+        trade_fills = self.async_run_with_timeout(self.connector._all_trade_updates_for_order(in_flight_order))
 
         self.assertEqual(len(trade_fills), 1)
         self.assertEqual(
@@ -2840,7 +2915,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
     @patch("hummingbot.connector.exchange.xrpl.xrpl_auth.XRPLAuth.get_account")
     @patch("hummingbot.connector.exchange.xrpl.xrpl_exchange.XrplExchange.request_with_retry")
-    async def test_fetch_account_transactions(self, request_with_retry_mock, get_account_mock):
+    def test_fetch_account_transactions(self, request_with_retry_mock, get_account_mock):
 
         get_account_mock.return_value = "r2XdzWFVoHGfGVmXugtKhxMu3bqhsYiWK"  # noqa: mock
         request_with_retry_mock.return_value = Response(
@@ -2850,10 +2925,10 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
             type=ResponseType.RESPONSE,
         )
 
-        txs = await self.connector._fetch_account_transactions(ledger_index=88824981)
+        txs = self.async_run_with_timeout(self.connector._fetch_account_transactions(ledger_index=88824981))
         self.assertEqual(len(txs), 1)
 
-    async def test_tx_submit(self):
+    def test_tx_submit(self):
         mock_client = AsyncMock()
         mock_client._request_impl.return_value = Response(
             status=ResponseStatus.SUCCESS,
@@ -2864,7 +2939,7 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
 
         some_tx = OfferCancel(account="r2XdzWFVoHGfGVmXugtKhxMu3bqhsYiWK", offer_sequence=88824981)
 
-        resp = await self.connector.tx_submit(some_tx, mock_client)
+        resp = self.async_run_with_timeout(self.connector.tx_submit(some_tx, mock_client))
         self.assertEqual(resp.status, ResponseStatus.SUCCESS)
 
         # check if there is exception if response status is not success
@@ -2876,6 +2951,6 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(XRPLRequestFailureException) as context:
-            await self.connector.tx_submit(some_tx, mock_client)
+            self.async_run_with_timeout(self.connector.tx_submit(some_tx, mock_client))
 
         self.assertTrue("something" in str(context.exception))

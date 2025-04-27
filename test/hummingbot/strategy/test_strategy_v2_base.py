@@ -34,7 +34,7 @@ class TestStrategyV2Base(IsolatedAsyncioWrapperTestCase):
         self.trading_pair: str = "HBOT-USDT"
         self.strategy_config = StrategyV2ConfigBase(markets={self.connector_name: {self.trading_pair}},
                                                     candles_config=[])
-        with patch('asyncio.create_task', return_value=MagicMock()):
+        with patch('asyncio.create_task', return_value=AsyncMock()):
             # Initialize the strategy with mock components
             with patch("hummingbot.strategy.strategy_v2_base.StrategyV2Base.listen_to_executor_actions", return_value=AsyncMock()):
                 with patch('hummingbot.strategy.strategy_v2_base.ExecutorOrchestrator') as MockExecutorOrchestrator:
@@ -266,6 +266,8 @@ class TestStrategyV2Base(IsolatedAsyncioWrapperTestCase):
                          ['id',
                           'timestamp',
                           'type',
+                          'close_timestamp',
+                          'close_type',
                           'status',
                           'config',
                           'net_pnl_pct',
@@ -275,8 +277,6 @@ class TestStrategyV2Base(IsolatedAsyncioWrapperTestCase):
                           'is_active',
                           'is_trading',
                           'custom_info',
-                          'close_timestamp',
-                          'close_type',
                           'controller_id',
                           'side'])
         self.assertEqual(df.iloc[0]['id'], '2')  # Since the dataframe is sorted by status
@@ -298,10 +298,12 @@ class TestStrategyV2Base(IsolatedAsyncioWrapperTestCase):
             close_type_counts={CloseType.TAKE_PROFIT: 10, CloseType.STOP_LOSS: 5}
         )
 
-    def test_format_status(self):
+    @patch("hummingbot.strategy.strategy_v2_base.ScriptStrategyBase.format_status")
+    def test_format_status(self, mock_super_format_status):
         # Mock dependencies
-        self.strategy.ready_to_trade = True
-        self.strategy.markets = {"mock_paper_exchange": {"ETH-USDT"}}
+        original_status = "Super class status"
+        mock_super_format_status.return_value = original_status
+
         controller_mock = MagicMock()
         controller_mock.to_format_status.return_value = ["Mock status for controller"]
         self.strategy.controllers = {"controller_1": controller_mock}
@@ -334,6 +336,7 @@ class TestStrategyV2Base(IsolatedAsyncioWrapperTestCase):
         status = self.strategy.format_status()
 
         # Assertions
+        self.assertIn(original_status, status)
         self.assertIn("Mock status for controller", status)
         self.assertIn("Controller: controller_1", status)
         self.assertIn("Realized PNL (Quote): 100.00", status)
@@ -349,7 +352,7 @@ class TestStrategyV2Base(IsolatedAsyncioWrapperTestCase):
             Exception,
             asyncio.CancelledError,
         ])
-        self.strategy.executor_orchestrator.execute_actions = MagicMock()
+        self.strategy.executor_orchestrator.execute_actions = AsyncMock()
         controller_mock = MagicMock()
         self.strategy.controllers = {"controller_1": controller_mock}
 

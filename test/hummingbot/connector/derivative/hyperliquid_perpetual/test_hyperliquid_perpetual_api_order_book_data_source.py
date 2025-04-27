@@ -2,8 +2,8 @@ import asyncio
 import json
 import re
 from decimal import Decimal
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
-from typing import Dict
+from typing import Awaitable, Dict
+from unittest import TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aioresponses import aioresponses
@@ -23,16 +23,16 @@ from hummingbot.connector.test_support.network_mocking_assistant import NetworkM
 from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.data_type.funding_info import FundingInfo, FundingInfoUpdate
 from hummingbot.core.data_type.order_book_message import OrderBookMessage, OrderBookMessageType
-from hummingbot.core.web_assistant.connections.connections_factory import ConnectionsFactory
 
 
-class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
+class HyperliquidPerpetualAPIOrderBookDataSourceTests(TestCase):
     # logging.Level required to receive logs from the data source logger
     level = 0
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "BTC"
         cls.quote_asset = "USD"
         cls.trading_pair = f"{cls.base_asset}-{cls.quote_asset}"
@@ -42,6 +42,7 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         super().setUp()
         self.log_records = []
         self.listening_task = None
+        self.mocking_assistant = NetworkMockingAssistant()
 
         client_config_map = ClientConfigAdapter(ClientConfigMap())
         self.connector = HyperliquidPerpetualDerivative(
@@ -63,14 +64,10 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         self.data_source.logger().setLevel(1)
         self.data_source.logger().addHandler(self)
 
+        self.resume_test_event = asyncio.Event()
+
         self.connector._set_trading_pair_symbol_map(
             bidict({f"{self.base_asset}-{self.quote_asset}-PERPETUAL": self.trading_pair}))
-
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
-        await ConnectionsFactory().close()
-        self.mocking_assistant = NetworkMockingAssistant()
-        self.resume_test_event = asyncio.Event()
 
     def tearDown(self) -> None:
         self.listening_task and self.listening_task.cancel()
@@ -91,6 +88,10 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
     def resume_test_callback(self, *_, **__):
         self.resume_test_event.set()
         return None
+
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 1):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
 
     def get_rest_snapshot_msg(self) -> Dict:
         return {
@@ -156,14 +157,16 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         ]
 
     @aioresponses()
-    async def test_get_new_order_book_successful(self, mock_api):
+    def test_get_new_order_book_successful(self, mock_api):
         endpoint = CONSTANTS.SNAPSHOT_REST_URL
         url = web_utils.public_rest_url(endpoint)
         regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?") + ".*")
         resp = self.get_rest_snapshot_msg()
         mock_api.post(regex_url, body=json.dumps(resp))
 
-        order_book = await self.data_source.get_new_order_book(self.trading_pair)
+        order_book = self.async_run_with_timeout(
+            self.data_source.get_new_order_book(self.trading_pair)
+        )
 
         self.assertEqual(1700687397643, order_book.snapshot_uid)
         bids = list(order_book.bid_entries())
@@ -176,17 +179,17 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         self.assertEqual(73.018, asks[0].amount)
 
     @aioresponses()
-    async def test_get_new_order_book_raises_exception(self, mock_api):
+    def test_get_new_order_book_raises_exception(self, mock_api):
         endpoint = CONSTANTS.SNAPSHOT_REST_URL
         url = web_utils.public_rest_url(endpoint)
         regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?") + ".*")
 
         mock_api.post(regex_url, status=400)
         with self.assertRaises(IOError):
-            await self.data_source.get_new_order_book(self.trading_pair)
+            self.async_run_with_timeout(self.data_source.get_new_order_book(self.trading_pair))
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_subscriptions_subscribes_to_trades_diffs_and_orderbooks(self, ws_connect_mock):
+    def test_listen_for_subscriptions_subscribes_to_trades_diffs_and_orderbooks(self, ws_connect_mock):
         ws_connect_mock.return_value = self.mocking_assistant.create_websocket_mock()
 
         result_subscribe_diffs = self.get_ws_snapshot_msg()
@@ -195,9 +198,9 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
             websocket_mock=ws_connect_mock.return_value,
             message=json.dumps(result_subscribe_diffs),
         )
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_subscriptions())
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_subscriptions())
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
 
         sent_subscription_messages = self.mocking_assistant.json_messages_sent_through_websocket(
             websocket_mock=ws_connect_mock.return_value
@@ -219,21 +222,22 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
     @patch("hummingbot.core.data_type.order_book_tracker_data_source.OrderBookTrackerDataSource._sleep")
     @patch("aiohttp.ClientSession.ws_connect")
-    async def test_listen_for_subscriptions_raises_cancel_exception(self, mock_ws, _: AsyncMock):
+    def test_listen_for_subscriptions_raises_cancel_exception(self, mock_ws, _: AsyncMock):
         mock_ws.side_effect = asyncio.CancelledError
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_subscriptions()
+            self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_subscriptions())
+            self.async_run_with_timeout(self.listening_task)
 
     @patch("hummingbot.core.data_type.order_book_tracker_data_source.OrderBookTrackerDataSource._sleep")
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_subscriptions_logs_exception_details(self, mock_ws, sleep_mock):
+    def test_listen_for_subscriptions_logs_exception_details(self, mock_ws, sleep_mock):
         mock_ws.side_effect = Exception("TEST ERROR.")
         sleep_mock.side_effect = lambda _: self._create_exception_and_unlock_test_with_event(asyncio.CancelledError())
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_subscriptions())
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_subscriptions())
 
-        await self.resume_test_event.wait()
+        self.async_run_with_timeout(self.resume_test_event.wait())
 
         self.assertTrue(
             self._is_logged(
@@ -242,25 +246,31 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
             )
         )
 
-    async def test_subscribe_to_channels_raises_cancel_exception(self):
+    def test_subscribe_to_channels_raises_cancel_exception(self):
         mock_ws = MagicMock()
         mock_ws.send.side_effect = asyncio.CancelledError
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source._subscribe_channels(mock_ws)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source._subscribe_channels(mock_ws)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_subscribe_to_channels_raises_exception_and_logs_error(self):
+    def test_subscribe_to_channels_raises_exception_and_logs_error(self):
         mock_ws = MagicMock()
         mock_ws.send.side_effect = Exception("Test Error")
 
         with self.assertRaises(Exception):
-            await self.data_source._subscribe_channels(mock_ws)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source._subscribe_channels(mock_ws)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error occurred subscribing to order book data streams.")
         )
 
-    async def test_listen_for_trades_cancelled_when_listening(self):
+    def test_listen_for_trades_cancelled_when_listening(self):
         mock_queue = MagicMock()
         mock_queue.get.side_effect = asyncio.CancelledError()
         self.data_source._message_queue[self.data_source._trade_messages_queue_key] = mock_queue
@@ -268,9 +278,12 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         msg_queue: asyncio.Queue = asyncio.Queue()
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_trades(self.local_event_loop, msg_queue)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_trades(self.ev_loop, msg_queue)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_listen_for_trades_logs_exception(self):
+    def test_listen_for_trades_logs_exception(self):
         incomplete_resp = {
             "code": 0,
             "message": "",
@@ -306,16 +319,20 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_trades(self.ev_loop, msg_queue)
+        )
+
         try:
-            await self.data_source.listen_for_trades(self.local_event_loop, msg_queue)
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error when processing public trade updates from exchange"))
 
-    async def test_listen_for_trades_successful(self):
-        await self._simulate_trading_rules_initialized()
+    def test_listen_for_trades_successful(self):
+        self._simulate_trading_rules_initialized()
         mock_queue = AsyncMock()
         trade_event = {'channel': 'trades', 'data': [
             {'coin': 'BTC', 'side': 'A', 'px': '2009.0', 'sz': '0.0079', 'time': 1701156061468,
@@ -328,16 +345,16 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(
-            self.data_source.listen_for_trades(self.local_event_loop, msg_queue))
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_trades(self.ev_loop, msg_queue))
 
-        msg: OrderBookMessage = await msg_queue.get()
+        msg: OrderBookMessage = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual(OrderBookMessageType.TRADE, msg.type)
         self.assertEqual(trade_event["data"][0]["hash"], msg.trade_id)
         self.assertEqual(trade_event["data"][0]["time"] * 1e-3, msg.timestamp)
 
-    async def test_listen_for_order_book_diffs_cancelled(self):
+    def test_listen_for_order_book_diffs_cancelled(self):
         mock_queue = AsyncMock()
         mock_queue.get.side_effect = asyncio.CancelledError()
         self.data_source._message_queue[self.data_source._diff_messages_queue_key] = mock_queue
@@ -345,12 +362,14 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         msg_queue: asyncio.Queue = asyncio.Queue()
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_order_book_diffs(self.local_event_loop, msg_queue)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_order_book_diffs(self.ev_loop, msg_queue)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_listen_for_order_book_diffs_logs_exception(self):
+    def test_listen_for_order_book_diffs_logs_exception(self):
         incomplete_resp = self.get_ws_diff_msg()
         del incomplete_resp["data"]["time"]
-        del incomplete_resp["data"]["coin"]
 
         mock_queue = AsyncMock()
         mock_queue.get.side_effect = [incomplete_resp, asyncio.CancelledError()]
@@ -358,27 +377,31 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_order_book_diffs(self.ev_loop, msg_queue)
+        )
+
         try:
-            await self.data_source.listen_for_order_book_diffs(self.local_event_loop, msg_queue)
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error when processing public order book updates from exchange"))
 
-    async def test_listen_for_order_book_diffs_successful(self):
-        await self._simulate_trading_rules_initialized()
+    def test_listen_for_order_book_diffs_successful(self):
+        self._simulate_trading_rules_initialized()
         mock_queue = AsyncMock()
         diff_event = self.get_ws_diff_msg_2()
-        mock_queue.get.side_effect = [diff_event, diff_event, asyncio.CancelledError()]
+        mock_queue.get.side_effect = [diff_event, asyncio.CancelledError()]
         self.data_source._message_queue[self.data_source._diff_messages_queue_key] = mock_queue
 
         msg_queue: asyncio.Queue = asyncio.Queue()
-        self.data_source._sleep = AsyncMock()
-        with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_order_book_diffs(self.local_event_loop, msg_queue)
 
-        msg: OrderBookMessage = await msg_queue.get()
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_order_book_diffs(self.ev_loop, msg_queue))
+
+        msg: OrderBookMessage = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual(OrderBookMessageType.DIFF, msg.type)
         self.assertEqual(-1, msg.trade_id)
@@ -395,7 +418,7 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         self.assertEqual(73.018, asks[0].amount)
 
     @aioresponses()
-    async def test_listen_for_order_book_snapshots_cancelled_when_fetching_snapshot(self, mock_api):
+    def test_listen_for_order_book_snapshots_cancelled_when_fetching_snapshot(self, mock_api):
         endpoint = CONSTANTS.SNAPSHOT_REST_URL
         url = web_utils.public_rest_url(endpoint)
         regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?") + ".*")
@@ -403,11 +426,13 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         mock_api.post(regex_url, exception=asyncio.CancelledError)
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_order_book_snapshots(self.local_event_loop, asyncio.Queue())
+            self.async_run_with_timeout(
+                self.data_source.listen_for_order_book_snapshots(self.ev_loop, asyncio.Queue())
+            )
 
     @aioresponses()
     @patch("hummingbot.core.data_type.order_book_tracker_data_source.OrderBookTrackerDataSource._sleep")
-    async def test_listen_for_order_book_snapshots_log_exception(self, mock_api, sleep_mock):
+    def test_listen_for_order_book_snapshots_log_exception(self, mock_api, sleep_mock):
         msg_queue: asyncio.Queue = asyncio.Queue()
         sleep_mock.side_effect = lambda _: self._create_exception_and_unlock_test_with_event(asyncio.CancelledError())
 
@@ -417,17 +442,17 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
         mock_api.post(regex_url, exception=Exception)
 
-        self.listening_task = self.local_event_loop.create_task(
-            self.data_source.listen_for_order_book_snapshots(self.local_event_loop, msg_queue)
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_order_book_snapshots(self.ev_loop, msg_queue)
         )
-        await self.resume_test_event.wait()
+        self.async_run_with_timeout(self.resume_test_event.wait())
 
         self.assertTrue(
             self._is_logged("ERROR", f"Unexpected error fetching order book snapshot for {self.trading_pair}.")
         )
 
     @aioresponses()
-    async def test_listen_for_order_book_snapshots_successful(self, mock_api):
+    def test_listen_for_order_book_snapshots_successful(self, mock_api):
         msg_queue: asyncio.Queue = asyncio.Queue()
         endpoint = CONSTANTS.SNAPSHOT_REST_URL
         url = web_utils.public_rest_url(endpoint)
@@ -437,11 +462,11 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
         mock_api.post(regex_url, body=json.dumps(resp))
 
-        self.listening_task = self.local_event_loop.create_task(
-            self.data_source.listen_for_order_book_snapshots(self.local_event_loop, msg_queue)
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_order_book_snapshots(self.ev_loop, msg_queue)
         )
 
-        msg: OrderBookMessage = await msg_queue.get()
+        msg: OrderBookMessage = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual(OrderBookMessageType.SNAPSHOT, msg.type)
         self.assertEqual(-1, msg.trade_id)
@@ -459,20 +484,22 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         self.assertEqual(73.018, asks[0].amount)
 
     @aioresponses()
-    async def test_get_funding_info(self, mock_api):
+    def test_get_funding_info(self, mock_api):
         endpoint = CONSTANTS.EXCHANGE_INFO_URL
         url = web_utils.public_rest_url(endpoint)
         regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?") + ".*")
         resp = self.get_funding_info_rest_msg()
         mock_api.post(regex_url, body=json.dumps(resp))
 
-        funding_info: FundingInfo = await self.data_source.get_funding_info(self.trading_pair)
+        funding_info: FundingInfo = self.async_run_with_timeout(
+            self.data_source.get_funding_info(self.trading_pair)
+        )
         msg_result = resp
 
         self.assertEqual(self.trading_pair, funding_info.trading_pair)
         self.assertEqual(Decimal(str(msg_result[1][0]["funding"])), funding_info.rate)
 
-    async def _simulate_trading_rules_initialized(self):
+    def _simulate_trading_rules_initialized(self):
         mocked_response = self.get_trading_rule_rest_msg()
         self.connector._initialize_trading_pair_symbols_from_exchange_info(mocked_response)
         self.connector.coin_to_asset = {asset_info["name"]: asset for (asset, asset_info) in
@@ -488,7 +515,7 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
     @aioresponses()
     @patch.object(HyperliquidPerpetualAPIOrderBookDataSource, "_sleep")
-    async def test_listen_for_funding_info_cancelled_error_raised(self, mock_api, sleep_mock):
+    def test_listen_for_funding_info_cancelled_error_raised(self, mock_api, sleep_mock):
         sleep_mock.side_effect = [asyncio.CancelledError()]
         endpoint = CONSTANTS.EXCHANGE_INFO_URL
         url = web_utils.public_rest_url(endpoint)
@@ -498,12 +525,13 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
         mock_queue: asyncio.Queue = asyncio.Queue()
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_funding_info(mock_queue)
+            self.async_run_with_timeout(self.data_source.listen_for_funding_info(mock_queue),
+                                        timeout=1)
 
         self.assertEqual(1, mock_queue.qsize())
 
     @aioresponses()
-    async def test_listen_for_funding_info_logs_exception(self, mock_api):
+    def test_listen_for_funding_info_logs_exception(self, mock_api):
         endpoint = CONSTANTS.EXCHANGE_INFO_URL
         url = web_utils.public_rest_url(endpoint)
         regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?") + ".*")
@@ -513,9 +541,10 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_funding_info(msg_queue))
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_funding_info(msg_queue))
 
-        await self.resume_test_event.wait()
+        self.async_run_with_timeout(self.resume_test_event.wait(),
+                                    timeout=CONSTANTS.FUNDING_RATE_UPDATE_INTERNAL_SECOND + 10)
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error when processing public funding info updates from exchange"))
@@ -524,7 +553,7 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
         "hummingbot.connector.derivative.hyperliquid_perpetual.hyperliquid_perpetual_api_order_book_data_source."
         "HyperliquidPerpetualAPIOrderBookDataSource._next_funding_time")
     @aioresponses()
-    async def test_listen_for_funding_info_successful(self, next_funding_time_mock, mock_api):
+    def test_listen_for_funding_info_successful(self, next_funding_time_mock, mock_api):
         next_funding_time_mock.return_value = 1713272400
         endpoint = CONSTANTS.EXCHANGE_INFO_URL
         url = web_utils.public_rest_url(endpoint)
@@ -534,9 +563,10 @@ class HyperliquidPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTest
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_funding_info(msg_queue))
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_funding_info(msg_queue))
 
-        msg: FundingInfoUpdate = await msg_queue.get()
+        msg: FundingInfoUpdate = self.async_run_with_timeout(msg_queue.get(),
+                                                             timeout=CONSTANTS.FUNDING_RATE_UPDATE_INTERNAL_SECOND + 10)
 
         self.assertEqual(self.trading_pair, msg.trading_pair)
         expected_index_price = Decimal('36717.0')

@@ -1,7 +1,7 @@
 import asyncio
+import unittest
 from decimal import Decimal
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -19,23 +19,24 @@ from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
 
 
-class CubeUserStreamDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
+class CubeUserStreamDataSourceUnitTests(unittest.TestCase):
     # the level is required to receive logs from the data source logger
     level = 0
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "SOL"
         cls.quote_asset = "USDC"
         cls.trading_pair = f"{cls.base_asset}-{cls.quote_asset}"
         cls.domain = "live"
 
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
+    def setUp(self) -> None:
+        super().setUp()
         self.log_records = []
         self.listening_task: Optional[asyncio.Task] = None
-        self.mocking_assistant = NetworkMockingAssistant(self.local_event_loop)
+        self.mocking_assistant = NetworkMockingAssistant()
 
         self.throttler = AsyncThrottler(rate_limits=CONSTANTS.RATE_LIMITS)
         self.mock_time_provider = MagicMock()
@@ -148,6 +149,10 @@ class CubeUserStreamDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
         self.resume_test_event.set()
         return value
 
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 2):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
+
     def _error_response(self) -> Dict[str, Any]:
         resp = {
             "code": "ERROR CODE",
@@ -179,7 +184,7 @@ class CubeUserStreamDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
         return boostrap.SerializeToString()
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_get_user_update_event(self, mock_ws):
+    def test_listen_for_user_stream_get_user_update_event(self, mock_ws):
         mock_ws.return_value = self.mocking_assistant.create_websocket_mock()
         self.mocking_assistant.add_websocket_aiohttp_message(
             websocket_mock=mock_ws.return_value, message=self._boostrap_positions_event(),
@@ -187,32 +192,32 @@ class CubeUserStreamDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
         )
 
         msg_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(
+        self.listening_task = self.ev_loop.create_task(
             self.data_source.listen_for_user_stream(msg_queue)
         )
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(mock_ws.return_value)
 
-        msg = await msg_queue.get()
+        msg = self.async_run_with_timeout(msg_queue.get())
         self.assertEqual(self._boostrap_positions_event(), msg)
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_connection_failed(self, mock_ws):
+    def test_listen_for_user_stream_connection_failed(self, mock_ws):
         mock_ws.side_effect = lambda *arg, **kwars: self._create_exception_and_unlock_test_with_event(
             Exception("TEST ERROR."))
 
         msg_queue = asyncio.Queue()
-        self.listening_task = self.local_event_loop.create_task(
+        self.listening_task = self.ev_loop.create_task(
             self.data_source.listen_for_user_stream(msg_queue)
         )
 
-        await self.resume_test_event.wait()
+        self.async_run_with_timeout(self.resume_test_event.wait())
 
         self.assertTrue(
             self._is_logged("ERROR",
                             "Unexpected error while listening to user stream. Retrying after 5 seconds..."))
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream_iter_message_throws_exception(self, mock_ws):
+    def test_listen_for_user_stream_iter_message_throws_exception(self, mock_ws):
         msg_queue: asyncio.Queue = asyncio.Queue()
         mock_ws.return_value = self.mocking_assistant.create_websocket_mock()
         mock_ws.return_value.receive.side_effect = (lambda *args, **kwargs:
@@ -220,11 +225,11 @@ class CubeUserStreamDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
                                                         Exception("TEST ERROR")))
         mock_ws.close.return_value = None
 
-        self.listening_task = self.local_event_loop.create_task(
+        self.listening_task = self.ev_loop.create_task(
             self.data_source.listen_for_user_stream(msg_queue)
         )
 
-        await self.resume_test_event.wait()
+        self.async_run_with_timeout(self.resume_test_event.wait())
 
         self.assertTrue(
             self._is_logged(

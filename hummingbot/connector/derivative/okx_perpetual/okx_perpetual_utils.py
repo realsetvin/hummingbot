@@ -1,9 +1,9 @@
 from decimal import Decimal
 from typing import Any, Dict
 
-from pydantic import ConfigDict, Field, SecretStr
+from pydantic import Field, SecretStr
 
-from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
+from hummingbot.client.config.config_data_types import BaseConnectorConfigMap, ClientFieldData
 from hummingbot.connector.utils import split_hb_trading_pair
 from hummingbot.core.data_type.trade_fee import TradeFeeSchema
 
@@ -49,35 +49,37 @@ def get_next_funding_timestamp(current_timestamp: float) -> float:
 
 
 class OkxPerpetualConfigMap(BaseConnectorConfigMap):
-    connector: str = "okx_perpetual"
+    connector: str = Field(default="okx_perpetual", client_data=None)
     okx_perpetual_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Okx Perpetual API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Okx Perpetual API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
     okx_perpetual_secret_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Okx Perpetual secret key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Okx Perpetual secret key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
     okx_perpetual_passphrase: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Okx Perpetual passphrase",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Okx Perpetual passphrase",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
-    model_config = ConfigDict(title="okx_perpetual")
+
+    class Config:
+        title = "okx_perpetual"
 
 
-KEYS = OkxPerpetualConfigMap.model_construct()
+KEYS = OkxPerpetualConfigMap.construct()

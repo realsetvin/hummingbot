@@ -2,8 +2,8 @@ import asyncio
 import json
 import re
 from decimal import Decimal
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
-from typing import Dict, List
+from typing import Awaitable, Dict, List
+from unittest import TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlencode
 
@@ -21,19 +21,19 @@ from hummingbot.connector.derivative.okx_perpetual.okx_perpetual_derivative impo
 from hummingbot.connector.test_support.network_mocking_assistant import NetworkMockingAssistant
 from hummingbot.core.data_type.funding_info import FundingInfo, FundingInfoUpdate
 from hummingbot.core.data_type.order_book_message import OrderBookMessage, OrderBookMessageType
-from hummingbot.core.web_assistant.connections.connections_factory import ConnectionsFactory
 
 BASE_ASSET = "COINALPHA"
 QUOTE_ASSET = "HBOT"
 
 
-class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
+class OKXPerpetualAPIOrderBookDataSourceTests(TestCase):
     # logging.Level required to receive logs from the data source logger
     level = 0
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = BASE_ASSET
         cls.quote_asset = QUOTE_ASSET
         cls.trading_pair = f"{BASE_ASSET}-{QUOTE_ASSET}"
@@ -44,6 +44,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         super().setUp()
         self.log_records = []
         self.listening_task = None
+        self.mocking_assistant = NetworkMockingAssistant()
 
         client_config_map = ClientConfigAdapter(ClientConfigMap())
         self.connector = OkxPerpetualDerivative(
@@ -68,14 +69,10 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.data_source.logger().setLevel(1)
         self.data_source.logger().addHandler(self)
 
+        self.resume_test_event = asyncio.Event()
+
         self.connector._set_trading_pair_symbol_map(
             bidict({f"{self.base_asset}{self.quote_asset}": self.trading_pair}))
-
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
-        await ConnectionsFactory().close()
-        self.mocking_assistant = NetworkMockingAssistant()
-        self.resume_test_event = asyncio.Event()
 
     def tearDown(self) -> None:
         self.listening_task and self.listening_task.cancel()
@@ -92,6 +89,10 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
     def _create_exception_and_unlock_test_with_event(self, exception):
         self.resume_test_event.set()
         raise exception
+
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 1):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
 
     @staticmethod
     def get_rest_snapshot_msg() -> Dict:
@@ -408,7 +409,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
     # TODO: Check if unclosed client session should remain after test run
     @aioresponses()
-    async def test_get_new_order_book_successful(self, mock_api):
+    def test_get_new_order_book_successful(self, mock_api):
         self.configure_trading_rules_response(mock_api)
         endpoint = CONSTANTS.REST_ORDER_BOOK[CONSTANTS.ENDPOINT]
         url = web_utils.get_rest_url_for_endpoint(endpoint, self.domain)
@@ -416,7 +417,9 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         resp = self.get_rest_snapshot_msg()
         mock_api.get(regex_url, body=json.dumps(resp))
 
-        order_book = await self.data_source.get_new_order_book(self.trading_pair)
+        order_book = self.async_run_with_timeout(
+            self.data_source.get_new_order_book(self.trading_pair)
+        )
 
         expected_update_id = int(float(resp["data"][0]["ts"]))
 
@@ -433,7 +436,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(expected_update_id, asks[0].update_id)
 
     @aioresponses()
-    async def test_get_new_order_book_raises_exception(self, mock_api):
+    def test_get_new_order_book_raises_exception(self, mock_api):
         self.configure_trading_rules_response(mock_api)
         endpoint = CONSTANTS.REST_ORDER_BOOK[CONSTANTS.ENDPOINT]
         url = web_utils.get_rest_url_for_endpoint(endpoint, self.domain)
@@ -441,19 +444,23 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         mock_api.get(regex_url, status=400)
         with self.assertRaises(IOError):
-            await self.data_source.get_new_order_book(self.trading_pair)
+            self.async_run_with_timeout(
+                self.data_source.get_new_order_book(self.trading_pair)
+            )
 
     @aioresponses()
-    async def test_get_last_traded_prices(self, mock_api):
+    def test_get_last_traded_prices(self, mock_api):
         url = web_utils.get_rest_url_for_endpoint(CONSTANTS.REST_LATEST_SYMBOL_INFORMATION[CONSTANTS.ENDPOINT], self.domain)
         url_regex = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?"))
         mock_api.get(url_regex, body=json.dumps(self.get_last_traded_prices_rest_msg()))
-        last_traded_prices = await self.data_source.get_last_traded_prices([self.trading_pair])
+        last_traded_prices = self.async_run_with_timeout(
+            self.data_source.get_last_traded_prices([self.trading_pair])
+        )
         self.assertEqual(2, len(last_traded_prices))
         self.assertEqual(9999.99, last_traded_prices[self.trading_pair])
 
     @aioresponses()
-    async def test_get_funding_info(self, mock_api):
+    def test_get_funding_info(self, mock_api):
         funding_endpoint = CONSTANTS.REST_FUNDING_RATE_INFO[CONSTANTS.ENDPOINT]
         funding_url = web_utils.get_rest_url_for_endpoint(funding_endpoint, self.domain)
         funding_regex_url = re.compile(f"^{funding_url}".replace(".", r"\.").replace("?", r"\?"))
@@ -472,7 +479,9 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         mark_price_resp = self.get_mark_price_info_rest_msg()
         mock_api.get(mark_price_regex_url, body=json.dumps(mark_price_resp))
 
-        funding_info: FundingInfo = await self.data_source.get_funding_info(self.trading_pair)
+        funding_info: FundingInfo = self.async_run_with_timeout(
+            self.data_source.get_funding_info(self.trading_pair)
+        )
 
         self.assertEqual(self.trading_pair, funding_info.trading_pair)
         self.assertEqual(Decimal(index_price_resp["data"][0]["idxPx"]), funding_info.index_price)
@@ -481,7 +490,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(Decimal(funding_info_resp["data"][0]["fundingRate"]), funding_info.rate)
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_subscribe_channels_successful(self, ws_connect_mock):
+    def test_subscribe_channels_successful(self, ws_connect_mock):
         ws_connect_mock.return_value = self.mocking_assistant.create_websocket_mock()
 
         result_subscribe_trade = self.get_ws_trade_msg()
@@ -511,9 +520,9 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
             message=json.dumps(result_subscribe_funding_info),
         )
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_subscriptions())
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_subscriptions())
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
 
         sent_subscription_messages = self.mocking_assistant.json_messages_sent_through_websocket(
             websocket_mock=ws_connect_mock.return_value
@@ -580,25 +589,31 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
             self._is_logged("INFO", "Subscribed to public order book, trade and funding info channels...")
         )
 
-    async def test_subscribe_channels_raises_cancel_exception(self):
+    def test_subscribe_channels_raises_cancel_exception(self):
         mock_ws = MagicMock()
         mock_ws.send.side_effect = asyncio.CancelledError
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source._subscribe_channels(mock_ws)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source._subscribe_channels(mock_ws)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_subscribe_channels_raises_exception_and_logs_error(self):
+    def test_subscribe_channels_raises_exception_and_logs_error(self):
         mock_ws = MagicMock()
         mock_ws.send.side_effect = Exception("Test Error")
 
         with self.assertRaises(Exception):
-            await self.data_source._subscribe_channels(mock_ws)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source._subscribe_channels(mock_ws)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error occurred subscribing to order book trading and delta streams...")
         )
 
-    async def test_listen_for_trades_cancelled_when_listening(self):
+    def test_listen_for_trades_cancelled_when_listening(self):
         mock_queue = MagicMock()
         mock_queue.get.side_effect = asyncio.CancelledError()
         self.data_source._message_queue[self.data_source._trade_messages_queue_key] = mock_queue
@@ -606,10 +621,13 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         msg_queue: asyncio.Queue = asyncio.Queue()
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_trades(self.local_event_loop, msg_queue)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_trades(self.ev_loop, msg_queue)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
     # TODO: Check if raises tests should print exceptions during test run
-    async def test_listen_for_trades_logs_exception(self):
+    def test_listen_for_trades_logs_exception(self):
         incomplete_resp = self.get_ws_trade_msg()
         del incomplete_resp["data"][0]["tradeId"]
 
@@ -619,15 +637,19 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_trades(self.ev_loop, msg_queue)
+        )
+
         try:
-            await self.data_source.listen_for_trades(self.local_event_loop, msg_queue)
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error when processing public trade updates from exchange"))
 
-    async def test_listen_for_trades_successful(self):
+    def test_listen_for_trades_successful(self):
         mock_queue = AsyncMock()
         trade_event = {
             "arg": {
@@ -650,16 +672,16 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(
-            self.data_source.listen_for_trades(self.local_event_loop, msg_queue))
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_trades(self.ev_loop, msg_queue))
 
-        msg: OrderBookMessage = await msg_queue.get()
+        msg: OrderBookMessage = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual(OrderBookMessageType.TRADE, msg.type)
         self.assertEqual(trade_event["data"][0]["tradeId"], msg.trade_id)
         self.assertEqual(int(trade_event["data"][0]["ts"]), msg.timestamp)
 
-    async def test_listen_for_order_book_diffs_cancelled(self):
+    def test_listen_for_order_book_diffs_cancelled(self):
         mock_queue = AsyncMock()
         mock_queue.get.side_effect = asyncio.CancelledError()
         self.data_source._message_queue[self.data_source._diff_messages_queue_key] = mock_queue
@@ -667,9 +689,12 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         msg_queue: asyncio.Queue = asyncio.Queue()
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_order_book_diffs(self.local_event_loop, msg_queue)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_order_book_diffs(self.ev_loop, msg_queue)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_listen_for_order_book_diffs_logs_exception(self):
+    def test_listen_for_order_book_diffs_logs_exception(self):
         incomplete_resp = {
             "arg": {
                 "channel": "books",
@@ -684,8 +709,12 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_order_book_diffs(self.ev_loop, msg_queue)
+        )
+
         try:
-            await self.data_source.listen_for_order_book_diffs(self.local_event_loop, msg_queue)
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 
@@ -693,7 +722,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
             self._is_logged("ERROR", "Unexpected error when processing public order book updates from exchange"))
 
     @aioresponses()
-    async def test_listen_for_order_book_diffs_successful(self, mock_api):
+    def test_listen_for_order_book_diffs_successful(self, mock_api):
         self.configure_trading_rules_response(mock_api)
         mock_queue = AsyncMock()
         diff_event = self.get_ws_order_book_diff_msg()
@@ -702,10 +731,10 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(
-            self.data_source.listen_for_order_book_diffs(self.local_event_loop, msg_queue))
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_order_book_diffs(self.ev_loop, msg_queue))
 
-        msg: OrderBookMessage = await msg_queue.get()
+        msg: OrderBookMessage = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual(OrderBookMessageType.DIFF, msg.type)
         self.assertEqual(-1, msg.trade_id)
@@ -725,7 +754,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(expected_update_id, asks[0].update_id)
 
     @aioresponses()
-    async def test_listen_for_order_book_snapshots_cancelled_when_fetching_snapshot(self, mock_api):
+    def test_listen_for_order_book_snapshots_cancelled_when_fetching_snapshot(self, mock_api):
         self.configure_trading_rules_response(mock_api)
         endpoint = CONSTANTS.REST_ORDER_BOOK[CONSTANTS.ENDPOINT]
         url = web_utils.get_rest_url_for_endpoint(endpoint=endpoint, domain=self.domain)
@@ -734,12 +763,14 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         mock_api.get(regex_url, exception=asyncio.CancelledError)
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_order_book_snapshots(self.local_event_loop, asyncio.Queue())
+            self.async_run_with_timeout(
+                self.data_source.listen_for_order_book_snapshots(self.ev_loop, asyncio.Queue())
+            )
 
     # TODO: Check if unclosed client session should remain after test run
     @aioresponses()
     @patch("hummingbot.core.data_type.order_book_tracker_data_source.OrderBookTrackerDataSource._sleep")
-    async def test_listen_for_order_book_snapshots_log_exception(self, mock_api, sleep_mock):
+    def test_listen_for_order_book_snapshots_log_exception(self, mock_api, sleep_mock):
         msg_queue: asyncio.Queue = asyncio.Queue()
         sleep_mock.side_effect = lambda _: self._create_exception_and_unlock_test_with_event(asyncio.CancelledError())
 
@@ -749,10 +780,10 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         mock_api.get(regex_url, exception=Exception)
 
-        self.listening_task = self.local_event_loop.create_task(
-            self.data_source.listen_for_order_book_snapshots(self.local_event_loop, msg_queue)
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_order_book_snapshots(self.ev_loop, msg_queue)
         )
-        await self.resume_test_event.wait()
+        self.async_run_with_timeout(self.resume_test_event.wait())
 
         self.assertTrue(
             self._is_logged("ERROR", f"Unexpected error fetching order book snapshot for {self.trading_pair}.")
@@ -760,7 +791,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
     # TODO
     @aioresponses()
-    async def test_listen_for_order_book_snapshots_successful(self, mock_api):
+    def test_listen_for_order_book_snapshots_successful(self, mock_api):
         self.data_source.FULL_ORDER_BOOK_RESET_DELTA_SECONDS = 1
         mock_queue = AsyncMock()
         snapshot_event = {
@@ -790,10 +821,10 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(
-            self.data_source.listen_for_order_book_snapshots(self.local_event_loop, msg_queue))
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_order_book_snapshots(self.ev_loop, msg_queue))
 
-        msg: OrderBookMessage = await msg_queue.get()
+        msg: OrderBookMessage = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual(OrderBookMessageType.SNAPSHOT, msg.type)
         self.assertEqual(-1, msg.trade_id)
@@ -812,7 +843,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(415, asks[0].amount)
         self.assertEqual(expected_update_id, asks[0].update_id)
 
-    async def test_listen_for_mark_price_cancelled_when_listening(self):
+    def test_listen_for_mark_price_cancelled_when_listening(self):
         mock_queue = MagicMock()
         mock_queue.get.side_effect = asyncio.CancelledError()
         self.data_source._message_queue[self.data_source._mark_price_queue_key] = mock_queue
@@ -820,9 +851,12 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         msg_queue: asyncio.Queue = asyncio.Queue()
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_mark_price_info(msg_queue)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_mark_price_info(msg_queue)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_listen_for_mark_price_logs_exception(self):
+    def test_listen_for_mark_price_logs_exception(self):
         incomplete_resp = self.get_ws_mark_price_info_msg()
         del incomplete_resp["arg"]["instId"]
 
@@ -832,15 +866,17 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_mark_price_info(msg_queue))
+
         try:
-            await self.data_source.listen_for_mark_price_info(msg_queue)
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error when processing public mark price updates from exchange"))
 
-    async def test_listen_for_mark_price_successful(self):
+    def test_listen_for_mark_price_successful(self):
         mark_price_event = self.get_ws_mark_price_info_msg()
 
         mock_queue = AsyncMock()
@@ -849,7 +885,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_mark_price_info(msg_queue))
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_mark_price_info(msg_queue))
 
         mark_price_update = Decimal(mark_price_event["data"][0]["markPx"])
         expected_last_index_price = -1
@@ -858,7 +894,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.data_source._last_index_price = expected_last_index_price
         self.data_source._last_next_funding_utc_timestamp = expected_last_next_funding_utc_timestamp
         self.data_source._last_rate = expected_last_rate
-        msg: FundingInfoUpdate = await msg_queue.get()
+        msg: FundingInfoUpdate = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual(self.trading_pair, msg.trading_pair)
         self.assertEqual(mark_price_update, msg.mark_price)
@@ -866,7 +902,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(expected_last_rate, msg.rate)
         self.assertEqual(expected_last_index_price, msg.index_price)
 
-    async def test_listen_for_index_price_cancelled_when_listening(self):
+    def test_listen_for_index_price_cancelled_when_listening(self):
         mock_queue = MagicMock()
         mock_queue.get.side_effect = asyncio.CancelledError()
         self.data_source._message_queue[self.data_source._index_price_queue_key] = mock_queue
@@ -874,9 +910,12 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         msg_queue: asyncio.Queue = asyncio.Queue()
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_index_price_info(msg_queue)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_index_price_info(msg_queue)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_listen_for_index_price_logs_exception(self):
+    def test_listen_for_index_price_logs_exception(self):
         incomplete_resp = self.get_ws_index_price_info_msg()
         del incomplete_resp["arg"]["instId"]
 
@@ -886,15 +925,17 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_index_price_info(msg_queue))
+
         try:
-            await self.data_source.listen_for_index_price_info(msg_queue)
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error when processing public index price updates from exchange"))
 
-    async def test_listen_for_index_price_successful(self):
+    def test_listen_for_index_price_successful(self):
         index_price_event = self.get_ws_index_price_info_msg()
 
         mock_queue = AsyncMock()
@@ -903,7 +944,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_index_price_info(msg_queue))
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_index_price_info(msg_queue))
 
         index_price_update = Decimal(index_price_event["data"][0]["idxPx"])
         expected_last_mark_price = -2
@@ -913,7 +954,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.data_source._last_mark_price = expected_last_mark_price
         self.data_source._last_next_funding_utc_timestamp = expected_last_next_funding_utc_timestamp
         self.data_source._last_rate = expected_last_rate
-        msg: FundingInfoUpdate = await msg_queue.get()
+        msg: FundingInfoUpdate = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual(self.trading_pair, msg.trading_pair)
         self.assertEqual(index_price_update, msg.index_price)
@@ -921,7 +962,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(expected_last_rate, msg.rate)
         self.assertEqual(expected_last_mark_price, msg.mark_price)
 
-    async def test_listen_for_funding_info_cancelled_when_listening(self):
+    def test_listen_for_funding_info_cancelled_when_listening(self):
         mock_queue = MagicMock()
         mock_queue.get.side_effect = asyncio.CancelledError()
         self.data_source._message_queue[self.data_source._funding_info_messages_queue_key] = mock_queue
@@ -929,9 +970,12 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         msg_queue: asyncio.Queue = asyncio.Queue()
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_funding_info(msg_queue)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_funding_info(msg_queue)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_listen_for_funding_info_logs_exception(self):
+    def test_listen_for_funding_info_logs_exception(self):
         incomplete_resp = self.get_ws_funding_info_msg()
         del incomplete_resp["arg"]["instId"]
 
@@ -941,15 +985,17 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_funding_info(msg_queue))
+
         try:
-            await self.data_source.listen_for_funding_info(msg_queue)
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error when processing public funding info updates from exchange"))
 
-    async def test_listen_for_funding_info_successful(self):
+    def test_listen_for_funding_info_successful(self):
         index_price_event = self.get_ws_funding_info_msg()
 
         mock_queue = AsyncMock()
@@ -958,7 +1004,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_funding_info(msg_queue))
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_funding_info(msg_queue))
 
         expected_last_index_price = -3
         expected_last_mark_price = -3
@@ -967,7 +1013,7 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
 
         self.data_source._last_mark_price = expected_last_mark_price
         self.data_source._last_index_price = expected_last_index_price
-        msg: FundingInfoUpdate = await msg_queue.get()
+        msg: FundingInfoUpdate = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual(self.trading_pair, msg.trading_pair)
         self.assertEqual(expected_last_index_price, msg.index_price)
@@ -975,17 +1021,17 @@ class OKXPerpetualAPIOrderBookDataSourceTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(update_rate, msg.rate)
         self.assertEqual(expected_last_mark_price, msg.mark_price)
 
-    async def test_channel_originating_message_snapshot_queue(self):
+    def test_channel_originating_message_snapshot_queue(self):
         event_message = self.get_ws_order_book_snapshot_msg()
         channel_result = self.data_source._channel_originating_message(event_message)
         self.assertEqual(channel_result, self.data_source._snapshot_messages_queue_key)
 
-    async def test_channel_originating_message_diff_queue(self):
+    def test_channel_originating_message_diff_queue(self):
         event_message = self.get_ws_order_book_diff_msg()
         channel_result = self.data_source._channel_originating_message(event_message)
         self.assertEqual(channel_result, self.data_source._diff_messages_queue_key)
 
-    async def test_channel_originating_message_trade_queue(self):
+    def test_channel_originating_message_trade_queue(self):
         event_message = self.get_ws_trade_msg()
         channel_result = self.data_source._channel_originating_message(event_message)
         self.assertEqual(channel_result, self.data_source._trade_messages_queue_key)

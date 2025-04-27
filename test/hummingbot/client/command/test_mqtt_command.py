@@ -1,7 +1,6 @@
 import asyncio
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
-from test.mock.mock_mqtt_server import FakeMQTTBroker
 from typing import Awaitable
+from unittest import TestCase
 from unittest.mock import MagicMock, PropertyMock, patch
 
 from async_timeout import timeout
@@ -9,12 +8,13 @@ from async_timeout import timeout
 from hummingbot.client.config.client_config_map import ClientConfigMap
 from hummingbot.client.config.config_helpers import ClientConfigAdapter
 from hummingbot.client.hummingbot_application import HummingbotApplication
+from hummingbot.core.mock_api.mock_mqtt_server import FakeMQTTBroker
 
 
 @patch("hummingbot.remote_iface.mqtt.MQTTGateway._INTERVAL_HEALTH_CHECK", 0.0)
 @patch("hummingbot.remote_iface.mqtt.MQTTGateway._INTERVAL_RESTART_LONG", 0.0)
 @patch("hummingbot.remote_iface.mqtt.MQTTGateway._INTERVAL_RESTART_SHORT", 0.0)
-class RemoteIfaceMQTTTests(IsolatedAsyncioWrapperTestCase):
+class RemoteIfaceMQTTTests(TestCase):
     # logging.Level required to receive logs from the exchange
     level = 0
 
@@ -25,6 +25,8 @@ class RemoteIfaceMQTTTests(IsolatedAsyncioWrapperTestCase):
         cls.fake_err_msg = "Some error"
         cls.client_config_map = ClientConfigAdapter(ClientConfigMap())
         cls.hbapp = HummingbotApplication(client_config_map=cls.client_config_map)
+        cls.ev_loop: asyncio.BaseEventLoop = asyncio.get_event_loop()
+        cls.hbapp.ev_loop = cls.ev_loop
         cls.client_config_map.mqtt_bridge.mqtt_port = 1888
         cls.prev_instance_id = cls.client_config_map.instance_id
         cls.client_config_map.instance_id = cls.instance_id
@@ -38,8 +40,6 @@ class RemoteIfaceMQTTTests(IsolatedAsyncioWrapperTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.ev_loop: asyncio.BaseEventLoop = self.local_event_loop
-        self.hbapp.ev_loop = self.ev_loop
         self.log_records = []
         self.resume_test_event = asyncio.Event()
         self.hbapp.logger().setLevel(1)
@@ -59,18 +59,9 @@ class RemoteIfaceMQTTTests(IsolatedAsyncioWrapperTestCase):
         self.patch_loggers_mock = self.patch_loggers_patcher.start()
         self.patch_loggers_mock.return_value = None
 
-    async def asyncSetUp(self):
-        await super().asyncSetUp()
-        # await self.hbapp.start_mqtt_async()
-
-    async def asyncTearDown(self):
-        await self.hbapp.stop_mqtt_async()
-        await asyncio.sleep(0.1)
-        await super().asyncTearDown()
-
     def tearDown(self):
-        # self.ev_loop.run_until_complete(self.hbapp.stop_mqtt_async())
-        # self.ev_loop.run_until_complete(asyncio.sleep(0.1))
+        self.ev_loop.run_until_complete(self.hbapp.stop_mqtt_async())
+        self.ev_loop.run_until_complete(asyncio.sleep(0.1))
         self.fake_mqtt_broker.clear()
         self.mqtt_transport_patcher.stop()
         self.patch_loggers_patcher.stop()
@@ -92,8 +83,8 @@ class RemoteIfaceMQTTTests(IsolatedAsyncioWrapperTestCase):
             print(f"Received Logs: {[record.getMessage() for record in self.log_records]}")
             raise e
 
-    async def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 1):
-        ret = await asyncio.wait_for(coroutine, timeout)
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 1):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
         return ret
 
     async def _create_exception_and_unlock_test_with_event_async(self, *args, **kwargs):
@@ -108,22 +99,26 @@ class RemoteIfaceMQTTTests(IsolatedAsyncioWrapperTestCase):
         self.resume_test_event.set()
         raise NotImplementedError(self.fake_err_msg)
 
-    async def test_start_mqtt_command(self):
-        await self.hbapp.start_mqtt_async()
-        await self.wait_for_logged("INFO", "MQTT Bridge connected with success.")
+    def test_start_mqtt_command(self):
+        self.ev_loop.run_until_complete(
+            self.hbapp.start_mqtt_async()
+        )
+        self.ev_loop.run_until_complete(self.wait_for_logged("INFO", "MQTT Bridge connected with success."))
 
     @patch('hummingbot.remote_iface.mqtt.MQTTGateway.start')
-    async def test_start_mqtt_command_fails(
+    def test_start_mqtt_command_fails(
         self,
         mqtt_start_mock: MagicMock,
     ):
         mqtt_start_mock.side_effect = self._create_exception_and_unlock_test_with_event
-        await self.hbapp.start_mqtt_async()
-        await self.wait_for_logged("ERROR", f"Failed to connect MQTT Bridge: {self.fake_err_msg}")
+        self.ev_loop.run_until_complete(
+            self.hbapp.start_mqtt_async()
+        )
+        self.ev_loop.run_until_complete(self.wait_for_logged("ERROR", f"Failed to connect MQTT Bridge: {self.fake_err_msg}"))
 
     @patch('hummingbot.client.command.mqtt_command.MQTTCommand._mqtt_sleep_rate_autostart_retry', new_callable=PropertyMock)
     @patch('hummingbot.remote_iface.mqtt.MQTTGateway.health', new_callable=PropertyMock)
-    async def test_start_mqtt_command_retries_with_autostart(
+    def test_start_mqtt_command_retries_with_autostart(
         self,
         mqtt_health_mock: PropertyMock,
         autostart_retry_mock: PropertyMock,
@@ -132,10 +127,10 @@ class RemoteIfaceMQTTTests(IsolatedAsyncioWrapperTestCase):
         autostart_retry_mock.return_value = 0.0
         self.client_config_map.mqtt_bridge.mqtt_autostart = True
         self.hbapp.mqtt_start()
-        await self.async_run_with_timeout(self.resume_test_event.wait())
-        await self.wait_for_logged(
+        self.async_run_with_timeout(self.resume_test_event.wait())
+        self.ev_loop.run_until_complete(self.wait_for_logged(
             "ERROR",
             f"Failed to connect MQTT Bridge: {self.fake_err_msg}. Retrying in 0.0 seconds."
-        )
+        ))
         mqtt_health_mock.side_effect = lambda: True
-        await self.wait_for_logged("INFO", "MQTT Bridge connected with success.")
+        self.ev_loop.run_until_complete(self.wait_for_logged("INFO", "MQTT Bridge connected with success."))

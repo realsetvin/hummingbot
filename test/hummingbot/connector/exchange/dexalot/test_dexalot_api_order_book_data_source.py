@@ -1,7 +1,8 @@
 import asyncio
 import json
+import unittest
 from decimal import Decimal
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
+from typing import Awaitable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aioresponses.core import aioresponses
@@ -17,21 +18,22 @@ from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.data_type.order_book_message import OrderBookMessage
 
 
-class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
+class DexalotAPIOrderBookDataSourceUnitTests(unittest.TestCase):
     # logging.Level required to receive logs from the data source logger
     level = 0
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "AVAX"
         cls.quote_asset = "USDC"
         cls.trading_pair = f"{cls.base_asset}-{cls.quote_asset}"
         cls.ex_trading_pair = cls.base_asset + "/" + cls.quote_asset
         cls.domain = "com"
 
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
+    def setUp(self) -> None:
+        super().setUp()
         self.log_records = []
         self.listening_task = None
         self.mocking_assistant = NetworkMockingAssistant()
@@ -74,6 +76,10 @@ class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
         self.resume_test_event.set()
         raise exception
 
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 1):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
+
     def _successfully_subscribed_event(self):
         resp = {'data': '2024-08-28T01:00:05.000Z', 'type': 'APP_VERSION'}
         return resp
@@ -111,9 +117,11 @@ class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
     @aioresponses()
     @patch("hummingbot.connector.exchange.dexalot.dexalot_api_order_book_data_source"
            ".DexalotAPIOrderBookDataSource._time")
-    async def test_get_new_order_book_successful(self, mock_api, mock_time):
+    def test_get_new_order_book_successful(self, mock_api, mock_time):
         mock_time.return_value = 1640780000
-        order_book: OrderBook = await self.data_source.get_new_order_book(self.trading_pair)
+        order_book: OrderBook = self.async_run_with_timeout(
+            self.data_source.get_new_order_book(self.trading_pair)
+        )
 
         expected_update_id = 1640780000
 
@@ -124,7 +132,7 @@ class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(0, len(asks))
 
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_subscriptions_subscribes_to_trades_and_order_diffs(self, ws_connect_mock):
+    def test_listen_for_subscriptions_subscribes_to_trades_and_order_diffs(self, ws_connect_mock):
         self._simulate_trading_rules_initialized()
 
         ws_connect_mock.return_value = self.mocking_assistant.create_websocket_mock()
@@ -135,9 +143,9 @@ class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
             websocket_mock=ws_connect_mock.return_value,
             message=json.dumps(result_subscribe))
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_subscriptions())
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_subscriptions())
 
-        await self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
+        self.mocking_assistant.run_until_all_aiohttp_messages_delivered(ws_connect_mock.return_value)
 
         sent_subscription_messages = self.mocking_assistant.json_messages_sent_through_websocket(
             websocket_mock=ws_connect_mock.return_value)
@@ -159,48 +167,51 @@ class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
 
     @patch("hummingbot.core.data_type.order_book_tracker_data_source.OrderBookTrackerDataSource._sleep")
     @patch("aiohttp.ClientSession.ws_connect")
-    async def test_listen_for_subscriptions_raises_cancel_exception(self, mock_ws, _: AsyncMock):
+    def test_listen_for_subscriptions_raises_cancel_exception(self, mock_ws, _: AsyncMock):
         mock_ws.side_effect = asyncio.CancelledError
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_subscriptions()
+            self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_subscriptions())
+            self.async_run_with_timeout(self.listening_task)
 
     @patch("hummingbot.core.data_type.order_book_tracker_data_source.OrderBookTrackerDataSource._sleep")
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_subscriptions_logs_exception_details(self, mock_ws, sleep_mock):
+    def test_listen_for_subscriptions_logs_exception_details(self, mock_ws, sleep_mock):
         mock_ws.side_effect = Exception("TEST ERROR.")
         sleep_mock.side_effect = lambda _: self._create_exception_and_unlock_test_with_event(asyncio.CancelledError())
 
-        self.listening_task = self.local_event_loop.create_task(self.data_source.listen_for_subscriptions())
+        self.listening_task = self.ev_loop.create_task(self.data_source.listen_for_subscriptions())
 
-        await self.resume_test_event.wait()
+        self.async_run_with_timeout(self.resume_test_event.wait())
 
         self.assertTrue(
             self._is_logged(
                 "ERROR",
                 "Unexpected error occurred when listening to order book streams. Retrying in 5 seconds..."))
 
-    async def test_subscribe_channels_raises_cancel_exception(self):
+    def test_subscribe_channels_raises_cancel_exception(self):
         self._simulate_trading_rules_initialized()
         mock_ws = MagicMock()
         mock_ws.send.side_effect = asyncio.CancelledError
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source._subscribe_channels(mock_ws)
+            self.listening_task = self.ev_loop.create_task(self.data_source._subscribe_channels(mock_ws))
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_subscribe_channels_raises_exception_and_logs_error(self):
+    def test_subscribe_channels_raises_exception_and_logs_error(self):
         self._simulate_trading_rules_initialized()
         mock_ws = MagicMock()
         mock_ws.send.side_effect = Exception("Test Error")
 
         with self.assertRaises(Exception):
-            await self.data_source._subscribe_channels(mock_ws)
+            self.listening_task = self.ev_loop.create_task(self.data_source._subscribe_channels(mock_ws))
+            self.async_run_with_timeout(self.listening_task)
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error occurred subscribing to order book trading and delta streams...")
         )
 
-    async def test_listen_for_trades_cancelled_when_listening(self):
+    def test_listen_for_trades_cancelled_when_listening(self):
         mock_queue = MagicMock()
         mock_queue.get.side_effect = asyncio.CancelledError()
         self.data_source._message_queue[self.data_source._trade_messages_queue_key] = mock_queue
@@ -208,9 +219,12 @@ class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
         msg_queue: asyncio.Queue = asyncio.Queue()
 
         with self.assertRaises(asyncio.CancelledError):
-            await self.data_source.listen_for_trades(self.local_event_loop, msg_queue)
+            self.listening_task = self.ev_loop.create_task(
+                self.data_source.listen_for_trades(self.ev_loop, msg_queue)
+            )
+            self.async_run_with_timeout(self.listening_task)
 
-    async def test_listen_for_trades_logs_exception(self):
+    def test_listen_for_trades_logs_exception(self):
         incomplete_resp = {
             "m": 1,
             "i": 2,
@@ -222,15 +236,19 @@ class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_trades(self.ev_loop, msg_queue)
+        )
+
         try:
-            await self.data_source.listen_for_trades(self.local_event_loop, msg_queue)
+            self.async_run_with_timeout(self.listening_task)
         except asyncio.CancelledError:
             pass
 
         self.assertTrue(
             self._is_logged("ERROR", "Unexpected error when processing public trade updates from exchange"))
 
-    async def test_listen_for_trades_successful(self):
+    def test_listen_for_trades_successful(self):
         self._simulate_trading_rules_initialized()
 
         mock_queue = AsyncMock()
@@ -239,10 +257,10 @@ class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
 
         msg_queue: asyncio.Queue = asyncio.Queue()
 
-        self.listening_task = self.local_event_loop.create_task(
-            self.data_source.listen_for_trades(self.local_event_loop, msg_queue))
+        self.listening_task = self.ev_loop.create_task(
+            self.data_source.listen_for_trades(self.ev_loop, msg_queue))
 
-        msg: OrderBookMessage = await msg_queue.get()
+        msg: OrderBookMessage = self.async_run_with_timeout(msg_queue.get())
 
         self.assertEqual("1807784856", msg.trade_id)
 
@@ -272,16 +290,3 @@ class DexalotAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
                 min_base_amount_increment=min_order_size
             )
         }
-        self.connector._evm_params = {
-            'AVAX-USDC': {'base_coin': 'AVAX', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDC', 'quote_evmdecimals': Decimal('18')},
-            'AVAX-USDT': {'base_coin': 'AVAX', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDT', 'quote_evmdecimals': Decimal('18')},
-            'BTC-USDC': {'base_coin': 'BTC', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDC', 'quote_evmdecimals': Decimal('8')},
-            'COQ-AVAX': {'base_coin': 'COQ', 'base_evmdecimals': Decimal('18'), 'quote_coin': 'AVAX', 'quote_evmdecimals': Decimal('18')},
-            'ETH-USDC': {'base_coin': 'ETH', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDC', 'quote_evmdecimals': Decimal('18')},
-            'ETH-USDT': {'base_coin': 'ETH', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDT', 'quote_evmdecimals': Decimal('18')},
-            'EURC-USDC': {'base_coin': 'EURC', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDC', 'quote_evmdecimals': Decimal('6')},
-            'GMX-USDC': {'base_coin': 'GMX', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDC', 'quote_evmdecimals': Decimal('18')},
-            'GUN-USDC': {'base_coin': 'GUN', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDC', 'quote_evmdecimals': Decimal('18')},
-            'USDT-USDC': {'base_coin': 'USDT', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDC', 'quote_evmdecimals': Decimal('6')},
-            'WBTC-ETH': {'base_coin': 'WBTC', 'base_evmdecimals': Decimal('18'), 'quote_coin': 'ETH', 'quote_evmdecimals': Decimal('8')},
-            'WBTC-USDC': {'base_coin': 'WBTC', 'base_evmdecimals': Decimal('6'), 'quote_coin': 'USDC', 'quote_evmdecimals': Decimal('8')}}

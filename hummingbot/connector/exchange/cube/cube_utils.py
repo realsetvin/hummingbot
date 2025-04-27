@@ -1,9 +1,9 @@
 from decimal import Decimal
 from typing import Any, Dict
 
-from pydantic import ConfigDict, Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, validator
 
-from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
+from hummingbot.client.config.config_data_types import BaseConnectorConfigMap, ClientFieldData
 from hummingbot.client.config.config_validators import validate_int, validate_with_regex
 from hummingbot.connector.exchange.cube.cube_constants import DEFAULT_DOMAIN, TESTNET_DOMAIN
 from hummingbot.connector.exchange.cube.cube_ws_protobufs import trade_pb2
@@ -60,47 +60,48 @@ def raw_units_to_number(raw_units: trade_pb2.RawUnits):
 
 
 class CubeConfigMap(BaseConnectorConfigMap):
-    connector: str = "cube"
+    connector: str = Field(default="cube", const=True, client_data=None)
     cube_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Cube Exchange API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Cube Exchange API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
     cube_api_secret: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Cube Exchange API secret",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Cube Exchange API secret",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
     cube_subaccount_id: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Cube Exchange Subaccount ID",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Cube Exchange Subaccount ID",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
-    domain: str = Field(
+    domain = Field(
         default="live",
-        json_schema_extra={
-            "prompt": "Enter your Cube environment (live or staging)",
-            "is_secure": False,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        },
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Cube environment (live or staging)",
+            is_secure=False,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
-    model_config = ConfigDict(title="cube")
 
-    @field_validator("cube_api_key", mode="before")
-    @classmethod
+    class Config:
+        title = "cube"
+
+    @validator("cube_api_key", pre=True)
     def validate_cube_api_key(cls, v: str):
         pattern = r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
         error_message = "Invalid API key. API key should be a UUID string."
@@ -109,8 +110,7 @@ class CubeConfigMap(BaseConnectorConfigMap):
             raise ValueError(ret)
         return v
 
-    @field_validator("cube_api_secret", mode="before")
-    @classmethod
+    @validator("cube_api_secret", pre=True)
     def validate_cube_api_secret(cls, v: str):
         pattern = r'^[a-zA-Z0-9]{64}$'
         error_message = "Invalid secret key. Secret key should be a 64-character alphanumeric string."
@@ -119,20 +119,18 @@ class CubeConfigMap(BaseConnectorConfigMap):
             raise ValueError(ret)
         return v
 
-    @field_validator("cube_subaccount_id", mode="before")
-    @classmethod
+    @validator("cube_subaccount_id", pre=True)
     def validate_cube_subaccount_id(cls, v: str):
         ret = validate_int(v, min_value=0, inclusive=False)
         if ret is not None:
             raise ValueError(ret)
         return v
 
-    @field_validator("domain", mode="before")
-    @classmethod
+    @validator("domain", pre=True)
     def validate_domain(cls, v: str):
         if v not in [DEFAULT_DOMAIN, TESTNET_DOMAIN]:
             raise ValueError(f"Domain must be either {DEFAULT_DOMAIN} or {TESTNET_DOMAIN}")
         return v
 
 
-KEYS = CubeConfigMap.model_construct()
+KEYS = CubeConfigMap.construct()
