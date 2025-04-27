@@ -8,19 +8,16 @@
 .PHONY: uninstall
 .PHONY: clean
 .PHONY: build
+.PHONY: run-v2
 
 test:
-	coverage run -m nose \
- 	--exclude-dir="test/mock" \
- 	--exclude-dir="test/hummingbot/connector/gateway/amm" \
- 	--exclude-dir="test/hummingbot/connector/exchange/coinbase_advance_trade" \
- 	--exclude-dir="test/hummingbot/connector/exchange/ndax" \
- 	--exclude-dir="test/hummingbot/connector/exchange/foxbit" \
- 	--exclude-dir="test/hummingbot/connector/derivative/dydx_v4_perpetual" \
- 	--exclude-dir="test/hummingbot/connector/gateway/clob_spot/data_sources/dexalot" \
- 	--exclude-dir="test/hummingbot/strategy/amm_arb" \
- 	--exclude-dir="test/hummingbot/core/gateway" \
- 	--exclude-dir="test/hummingbot/strategy/amm_v3_lp"
+	coverage run -m pytest \
+ 	--ignore="test/mock" \
+ 	--ignore="test/hummingbot/connector/derivative/dydx_v4_perpetual/" \
+ 	--ignore="test/hummingbot/remote_iface/" \
+ 	--ignore="test/connector/utilities/oms_connector/" \
+ 	--ignore="test/hummingbot/strategy/amm_arb/" \
+ 	--ignore="test/hummingbot/strategy/cross_exchange_market_making/" \
 
 run_coverage: test
 	coverage report
@@ -48,3 +45,9 @@ uninstall:
 
 build:
 	./compile
+
+run-v2:
+	./bin/hummingbot_quickstart.py -p a -f v2_with_controllers.py -c $(filter-out $@,$(MAKECMDGOALS))
+
+%:
+	@:

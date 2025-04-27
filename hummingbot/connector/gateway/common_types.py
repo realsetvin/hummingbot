@@ -5,8 +5,7 @@ from typing import Any, Dict, Optional
 
 class Chain(Enum):
     ETHEREUM = ('ethereum', 'ETH')
-    TEZOS = ('tezos', 'XTZ')
-    TELOS = ('telos', 'TLOS')
+    SOLANA = ('solana', 'SOL')
 
     def __init__(self, chain: str, native_currency: str):
         self.chain = chain
@@ -17,6 +16,20 @@ class Connector(Enum):
     def __int__(self, chain: Chain, connector: str):
         self.chain = chain
         self.connector = connector
+
+
+class ConnectorType(Enum):
+    SWAP = "SWAP"
+    CLMM = "CLMM"
+    AMM = "AMM"
+
+
+def get_connector_type(connector_name: str) -> ConnectorType:
+    if "/clmm" in connector_name:
+        return ConnectorType.CLMM
+    elif "/amm" in connector_name:
+        return ConnectorType.AMM
+    return ConnectorType.SWAP
 
 
 @dataclass
