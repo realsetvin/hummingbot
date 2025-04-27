@@ -182,10 +182,8 @@ class CoinbaseAdvancedTradeUtilTestCases(IsolatedAsyncioWrapperTestCase):
 
     def test_set_exchange_time_from_timestamp(self):
         # Test with a variety of timestamps and units
-        # self.assertEqual(set_exchange_time_from_timestamp(1683808496.789012, "s"), '2023-05-11T12:34:56.789012Z')
-        # self.assertEqual(set_exchange_time_from_timestamp(1683808496789.012, "ms"), '2023-05-11T12:34:56.789012Z')
-        self.assertEqual(set_exchange_time_from_timestamp(1683808496.789012, "s"), '2023-05-11T12:34:56.789012+00:00')
-        self.assertEqual(set_exchange_time_from_timestamp(1683808496789.012, "ms"), '2023-05-11T12:34:56.789012+00:00')
+        self.assertEqual(set_exchange_time_from_timestamp(1683808496.789012, "s"), '2023-05-11T12:34:56.789012Z')
+        self.assertEqual(set_exchange_time_from_timestamp(1683808496789.012, "ms"), '2023-05-11T12:34:56.789012Z')
 
 
 if __name__ == "__main__":

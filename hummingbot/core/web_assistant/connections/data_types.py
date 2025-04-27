@@ -1,4 +1,3 @@
-import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -110,15 +109,7 @@ class RESTResponse:
         return headers_
 
     async def json(self) -> Any:
-        if self._aiohttp_response.content_type == "text/html":
-            byte_string = await self._aiohttp_response.read()
-            if isinstance(byte_string, bytes):
-                decoded_string = byte_string.decode('utf-8')
-                json_ = json.loads(decoded_string)
-            else:
-                json_ = await self._aiohttp_response.json()
-        else:
-            json_ = await self._aiohttp_response.json()
+        json_ = await self._aiohttp_response.json()
         return json_
 
     async def text(self) -> str:

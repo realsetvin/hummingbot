@@ -1,6 +1,7 @@
+import asyncio
 import json
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
-from typing import Optional
+import unittest
+from typing import Awaitable, Optional
 from unittest.mock import patch
 
 import aiohttp
@@ -15,16 +16,18 @@ from hummingbot.core.web_assistant.rest_post_processors import RESTPostProcessor
 from hummingbot.core.web_assistant.rest_pre_processors import RESTPreProcessorBase
 
 
-class RESTAssistantTest(IsolatedAsyncioWrapperTestCase):
+class RESTAssistantTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
 
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: int = 1):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
 
     @aioresponses()
-    async def test_rest_assistant_call_with_pre_and_post_processing(self, mocked_api):
+    def test_rest_assistant_call_with_pre_and_post_processing(self, mocked_api):
         url = "https://www.test.com/url"
         resp = {"one": 1}
         pre_processor_ran = False
@@ -45,8 +48,7 @@ class RESTAssistantTest(IsolatedAsyncioWrapperTestCase):
 
         pre_processors = [PreProcessor()]
         post_processors = [PostProcessor()]
-        aiohttp_client_session = aiohttp.ClientSession()
-        connection = RESTConnection(aiohttp_client_session)
+        connection = RESTConnection(aiohttp.ClientSession(loop=self.ev_loop))
         assistant = RESTAssistant(
             connection=connection,
             throttler=AsyncThrottler(rate_limits=[]),
@@ -54,16 +56,15 @@ class RESTAssistantTest(IsolatedAsyncioWrapperTestCase):
             rest_post_processors=post_processors)
         req = RESTRequest(method=RESTMethod.GET, url=url)
 
-        ret = await (assistant.call(req))
-        ret_json = await (ret.json())
+        ret = self.async_run_with_timeout(assistant.call(req))
+        ret_json = self.async_run_with_timeout(ret.json())
 
         self.assertEqual(resp, ret_json)
         self.assertTrue(pre_processor_ran)
         self.assertTrue(post_processor_ran)
-        await aiohttp_client_session.close()
 
     @patch("hummingbot.core.web_assistant.connections.rest_connection.RESTConnection.call")
-    async def test_rest_assistant_authenticates(self, mocked_call):
+    def test_rest_assistant_authenticates(self, mocked_call):
         url = "https://www.test.com/url"
         resp = {"one": 1}
         call_request: Optional[RESTRequest] = None
@@ -84,20 +85,18 @@ class RESTAssistantTest(IsolatedAsyncioWrapperTestCase):
             async def ws_authenticate(self, request: WSRequest) -> WSRequest:
                 pass
 
-        aiohttp_client_session = aiohttp.ClientSession()
-        connection = RESTConnection(aiohttp_client_session)
+        connection = RESTConnection(aiohttp.ClientSession(loop=self.ev_loop))
         assistant = RESTAssistant(connection, throttler=AsyncThrottler(rate_limits=[]), auth=AuthDummy())
         req = RESTRequest(method=RESTMethod.GET, url=url)
         auth_req = RESTRequest(method=RESTMethod.GET, url=url, is_auth_required=True)
 
-        await (assistant.call(req))
+        self.async_run_with_timeout(assistant.call(req))
 
         self.assertIsNotNone(call_request)
         self.assertIsNone(call_request.headers)
 
-        await (assistant.call(auth_req))
+        self.async_run_with_timeout(assistant.call(auth_req))
 
         self.assertIsNotNone(call_request)
         self.assertIsNotNone(call_request.headers)
         self.assertEqual(call_request.headers, auth_header)
-        await aiohttp_client_session.close()

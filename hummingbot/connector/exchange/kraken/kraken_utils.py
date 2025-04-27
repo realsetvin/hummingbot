@@ -1,10 +1,11 @@
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
-from pydantic import ConfigDict, Field, SecretStr, field_validator
+from pydantic import Field, SecretStr
+from pydantic.class_validators import validator
 
 import hummingbot.connector.exchange.kraken.kraken_constants as CONSTANTS
-from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
+from hummingbot.client.config.config_data_types import BaseConnectorConfigMap, ClientFieldData
 from hummingbot.connector.exchange.kraken.kraken_constants import KrakenAPITier
 from hummingbot.core.api_throttler.data_types import LinkedLimitWeightPair, RateLimit
 from hummingbot.core.data_type.trade_fee import TradeFeeSchema
@@ -164,36 +165,38 @@ def build_rate_limits_by_tier(tier: KrakenAPITier = KrakenAPITier.STARTER) -> Li
 
 
 class KrakenConfigMap(BaseConnectorConfigMap):
-    connector: str = "kraken"
+    connector: str = Field(default="kraken", client_data=None)
     kraken_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Kraken API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Kraken API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
     kraken_secret_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Kraken secret key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Kraken secret key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
     kraken_api_tier: str = Field(
         default="Starter",
-        json_schema_extra={
-            "prompt": "Enter your Kraken API Tier (Starter/Intermediate/Pro)",
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Kraken API Tier (Starter/Intermediate/Pro)",
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
-    model_config = ConfigDict(title="kraken")
 
-    @field_validator("kraken_api_tier", mode="before")
-    @classmethod
+    class Config:
+        title = "kraken"
+
+    @validator("kraken_api_tier", pre=True)
     def _api_tier_validator(cls, value: str) -> Optional[str]:
         """
         Determines if input value is a valid API tier
@@ -205,4 +208,4 @@ class KrakenConfigMap(BaseConnectorConfigMap):
             raise ValueError("No such Kraken API Tier.")
 
 
-KEYS = KrakenConfigMap.model_construct()
+KEYS = KrakenConfigMap.construct()

@@ -1,9 +1,9 @@
 from typing import List
 
 import pandas_ta as ta  # noqa: F401
-from pydantic import Field, field_validator
-from pydantic_core.core_schema import ValidationInfo
+from pydantic import Field, validator
 
+from hummingbot.client.config.config_data_types import ClientFieldData
 from hummingbot.data_feed.candles_feed.data_types import CandlesConfig
 from hummingbot.strategy_v2.controllers.directional_trading_controller_base import (
     DirectionalTradingControllerBase,
@@ -12,51 +12,71 @@ from hummingbot.strategy_v2.controllers.directional_trading_controller_base impo
 
 
 class MACDBBV1ControllerConfig(DirectionalTradingControllerConfigBase):
-    controller_name: str = "macd_bb_v1"
+    controller_name = "macd_bb_v1"
     candles_config: List[CandlesConfig] = []
     candles_connector: str = Field(
         default=None,
-        json_schema_extra={
-            "prompt": "Enter the connector for the candles data, leave empty to use the same exchange as the connector: ",
-            "prompt_on_new": True})
+        client_data=ClientFieldData(
+            prompt_on_new=True,
+            prompt=lambda mi: "Enter the connector for the candles data, leave empty to use the same exchange as the connector: ", )
+    )
     candles_trading_pair: str = Field(
         default=None,
-        json_schema_extra={
-            "prompt": "Enter the trading pair for the candles data, leave empty to use the same trading pair as the connector: ",
-            "prompt_on_new": True})
+        client_data=ClientFieldData(
+            prompt_on_new=True,
+            prompt=lambda mi: "Enter the trading pair for the candles data, leave empty to use the same trading pair as the connector: ", )
+    )
     interval: str = Field(
         default="3m",
-        json_schema_extra={
-            "prompt": "Enter the candle interval (e.g., 1m, 5m, 1h, 1d): ",
-            "prompt_on_new": True})
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the candle interval (e.g., 1m, 5m, 1h, 1d): ",
+            prompt_on_new=False))
     bb_length: int = Field(
         default=100,
-        json_schema_extra={"prompt": "Enter the Bollinger Bands length: ", "prompt_on_new": True})
-    bb_std: float = Field(default=2.0)
-    bb_long_threshold: float = Field(default=0.0)
-    bb_short_threshold: float = Field(default=1.0)
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the Bollinger Bands length: ",
+            prompt_on_new=True))
+    bb_std: float = Field(
+        default=2.0,
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the Bollinger Bands standard deviation: ",
+            prompt_on_new=False))
+    bb_long_threshold: float = Field(
+        default=0.0,
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the Bollinger Bands long threshold: ",
+            prompt_on_new=True))
+    bb_short_threshold: float = Field(
+        default=1.0,
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the Bollinger Bands short threshold: ",
+            prompt_on_new=True))
     macd_fast: int = Field(
         default=21,
-        json_schema_extra={"prompt": "Enter the MACD fast period: ", "prompt_on_new": True})
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the MACD fast period: ",
+            prompt_on_new=True))
     macd_slow: int = Field(
         default=42,
-        json_schema_extra={"prompt": "Enter the MACD slow period: ", "prompt_on_new": True})
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the MACD slow period: ",
+            prompt_on_new=True))
     macd_signal: int = Field(
         default=9,
-        json_schema_extra={"prompt": "Enter the MACD signal period: ", "prompt_on_new": True})
+        client_data=ClientFieldData(
+            prompt=lambda mi: "Enter the MACD signal period: ",
+            prompt_on_new=True))
 
-    @field_validator("candles_connector", mode="before")
-    @classmethod
-    def set_candles_connector(cls, v, validation_info: ValidationInfo):
+    @validator("candles_connector", pre=True, always=True)
+    def set_candles_connector(cls, v, values):
         if v is None or v == "":
-            return validation_info.data.get("connector_name")
+            return values.get("connector_name")
         return v
 
-    @field_validator("candles_trading_pair", mode="before")
-    @classmethod
-    def set_candles_trading_pair(cls, v, validation_info: ValidationInfo):
+    @validator("candles_trading_pair", pre=True, always=True)
+    def set_candles_trading_pair(cls, v, values):
         if v is None or v == "":
-            return validation_info.data.get("trading_pair")
+            return values.get("trading_pair")
         return v
 
 

@@ -3,8 +3,9 @@ from decimal import Decimal
 from typing import Dict, List, Optional
 
 import pandas_ta as ta  # noqa: F401
-from pydantic import Field, field_validator
+from pydantic import Field, validator
 
+from hummingbot.client.config.config_data_types import ClientFieldData
 from hummingbot.connector.connector_base import ConnectorBase
 from hummingbot.core.clock import Clock
 from hummingbot.core.data_type.common import OrderType, PositionMode, PriceType, TradeType
@@ -15,26 +16,40 @@ from hummingbot.strategy_v2.models.executor_actions import CreateExecutorAction,
 
 
 class SimpleDirectionalRSIConfig(StrategyV2ConfigBase):
-    script_file_name: str = os.path.basename(__file__)
+    script_file_name: str = Field(default_factory=lambda: os.path.basename(__file__))
     markets: Dict[str, List[str]] = {}
     candles_config: List[CandlesConfig] = []
     controllers_config: List[str] = []
-    exchange: str = Field(default="hyperliquid_perpetual")
-    trading_pair: str = Field(default="ETH-USD")
-    candles_exchange: str = Field(default="binance_perpetual")
-    candles_pair: str = Field(default="ETH-USDT")
-    candles_interval: str = Field(default="1m")
-    candles_length: int = Field(default=60, gt=0)
-    rsi_low: float = Field(default=30, gt=0)
-    rsi_high: float = Field(default=70, gt=0)
-    order_amount_quote: Decimal = Field(default=30, gt=0)
-    leverage: int = Field(default=10, gt=0)
-    position_mode: PositionMode = Field(default="ONEWAY")
+    exchange: str = Field(default="hyperliquid_perpetual", client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Exchange where the bot will trade"))
+    trading_pair: str = Field(default="ETH-USD", client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Trading pair where the bot will trade"))
+    candles_exchange: str = Field(default="binance_perpetual", client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Candles exchange used to calculate RSI"))
+    candles_pair: str = Field(default="ETH-USDT", client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Candles trading pair used to calculate RSI"))
+    candles_interval: str = Field(default="1m", client_data=ClientFieldData(
+        prompt_on_new=False, prompt=lambda mi: "Candle interval (e.g. 1m for 1 minute)"))
+    candles_length: int = Field(default=60, gt=0, client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Number of candles used to calculate RSI (e.g. 60)"))
+    rsi_low: float = Field(default=30, gt=0, client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "RSI lower bound to enter long position (e.g. 30)"))
+    rsi_high: float = Field(default=70, gt=0, client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "RSI upper bound to enter short position (e.g. 70)"))
+    order_amount_quote: Decimal = Field(default=30, gt=0, client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Order amount in quote asset"))
+    leverage: int = Field(default=10, gt=0, client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Leverage (e.g. 10 for 10x)"))
+    position_mode: PositionMode = Field(default="ONEWAY", client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Position mode (HEDGE/ONEWAY)"))
 
     # Triple Barrier Configuration
-    stop_loss: Decimal = Field(default=Decimal("0.03"), gt=0)
-    take_profit: Decimal = Field(default=Decimal("0.01"), gt=0)
-    time_limit: int = Field(default=60 * 45, gt=0)
+    stop_loss: Decimal = Field(default=Decimal("0.03"), gt=0, client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Position stop loss (e.g. 0.03 for 3%)"))
+    take_profit: Decimal = Field(default=Decimal("0.01"), gt=0, client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Position take profit (e.g. 0.01 for 1%)"))
+    time_limit: int = Field(default=60 * 45, gt=0, client_data=ClientFieldData(
+        prompt_on_new=True, prompt=lambda mi: "Position time limit in seconds (e.g. 300 for 5 minutes)"))
 
     @property
     def triple_barrier_config(self) -> TripleBarrierConfig:
@@ -48,8 +63,7 @@ class SimpleDirectionalRSIConfig(StrategyV2ConfigBase):
             time_limit_order_type=OrderType.MARKET  # Defaulting to MARKET as per requirement
         )
 
-    @field_validator('position_mode', mode="before")
-    @classmethod
+    @validator('position_mode', pre=True, allow_reuse=True)
     def validate_position_mode(cls, v: str) -> PositionMode:
         if v.upper() in PositionMode.__members__:
             return PositionMode[v.upper()]

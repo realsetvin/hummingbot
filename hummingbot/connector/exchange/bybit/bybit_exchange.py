@@ -205,8 +205,8 @@ class BybitExchange(ExchangePyBase):
         account_info = await self._get_account_info()
         if account_info["retCode"] != 0:
             raise ValueError(f"{account_info['retMsg']}")
-        account_type = 'SPOT' if account_info["result"]["unifiedMarginStatus"] == 1 else 'UNIFIED'
-
+        account_type = 'SPOT' if account_info["result"]["unifiedMarginStatus"] == \
+            CONSTANTS.ACCOUNT_TYPE["REGULAR"] else 'UNIFIED'
         return account_type
 
     async def _update_account_type(self):
@@ -306,12 +306,8 @@ class BybitExchange(ExchangePyBase):
         # await self._update_exchange_fee_rates()
         fee_rates = await self._get_exchange_fee_rates()
         for tpfee in fee_rates:
-            try:
-                trading_pair = await self.trading_pair_associated_to_exchange_symbol(symbol=tpfee["symbol"])
-                self._trading_fees[trading_pair] = tpfee
-            except KeyError:
-                # Skip pairs that are not trade enabled ie. they are not present in the trading pair map
-                continue
+            trading_pair = await self.trading_pair_associated_to_exchange_symbol(symbol=tpfee["symbol"])
+            self._trading_fees[trading_pair] = tpfee
 
     def _process_trade_event_message(self, trade_msg: Dict[str, Any]):
         """
@@ -369,17 +365,11 @@ class BybitExchange(ExchangePyBase):
                             break
                     for balance_entry in balances:
                         asset_name = balance_entry["coin"]
-                        if self._account_type == "UNIFIED":
-                            free_balance = Decimal(balance_entry["walletBalance"]) - Decimal(balance_entry["locked"]) - Decimal(balance_entry["totalOrderIM"]) - Decimal(
-                                balance_entry["totalPositionMM"]) - Decimal(balance_entry["totalPositionIM"])
-
-                        else:
-                            free_balance = Decimal(
-                                balance_entry.get("free") or
-                                balance_entry.get("availableToWithdraw") or
-                                balance_entry.get("availableToBorrow")
-                            )
-
+                        free_balance = Decimal(
+                            balance_entry.get("free") or
+                            balance_entry.get("availableToWithdraw") or
+                            balance_entry.get("availableToBorrow")
+                        )
                         total_balance = Decimal(balance_entry["walletBalance"])
                         self._account_available_balances[asset_name] = free_balance
                         self._account_balances[asset_name] = total_balance
@@ -536,8 +526,8 @@ class BybitExchange(ExchangePyBase):
         self._account_balances.clear()
         for coin in balances["result"]["list"][0]["coin"]:
             name = coin["coin"]
-            free_balance = Decimal(coin["free"]) if self._account_type == "SPOT" else Decimal(coin["walletBalance"]) - Decimal(coin["locked"]) - Decimal(coin["totalOrderIM"]) - Decimal(
-                coin["totalPositionMM"]) - Decimal(coin["totalPositionIM"])
+            free_balance = Decimal(coin["free"]) if self._account_type == "SPOT" \
+                else Decimal(coin["availableToWithdraw"])
             balance = Decimal(coin["walletBalance"])
             self._account_available_balances[name] = free_balance
             self._account_balances[name] = Decimal(balance)

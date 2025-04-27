@@ -1,2 +1,0 @@
-eip712-structs
-ptpython

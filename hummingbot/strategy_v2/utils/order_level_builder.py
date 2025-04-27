@@ -3,7 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
+from pydantic.class_validators import validator
 
 from hummingbot.core.data_type.common import TradeType
 from hummingbot.strategy_v2.executors.position_executor.data_types import TripleBarrierConfig
@@ -23,8 +24,7 @@ class OrderLevel(BaseModel):
     def level_id(self):
         return f"{self.side.name}_{self.level}"
 
-    @field_validator("order_amount_usd", "spread_factor", mode="before")
-    @classmethod
+    @validator("order_amount_usd", "spread_factor", pre=True, allow_reuse=True)
     def float_to_decimal(cls, v):
         return Decimal(v)
 

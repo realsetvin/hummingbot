@@ -1,7 +1,8 @@
 import asyncio
+import unittest
 from decimal import Decimal
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from typing import Awaitable
+from unittest.mock import AsyncMock, patch
 
 from hummingbot.client.config.client_config_map import ClientConfigMap
 from hummingbot.client.config.config_helpers import ClientConfigAdapter
@@ -13,13 +14,14 @@ from hummingbot.core.data_type.common import TradeType
 from hummingbot.core.data_type.order_book import OrderBook
 
 
-class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
+class XRPLAPIOrderBookDataSourceUnitTests(unittest.TestCase):
     # logging.Level required to receive logs from the data source logger
     level = 0
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "SOLO"
         cls.quote_asset = "XRP"
         cls.trading_pair = f"{cls.base_asset}-{cls.quote_asset}"
@@ -44,8 +46,6 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
             connector=self.connector,
             api_factory=self.connector._web_assistants_factory,
         )
-
-        self.data_source._sleep = MagicMock()
         self.data_source.logger().setLevel(1)
         self.data_source.logger().addHandler(self)
 
@@ -84,6 +84,10 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
     def _create_exception_and_unlock_test_with_event(self, exception):
         self.resume_test_event.set()
         raise exception
+
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: float = 5):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
 
     def _trade_update_event(self):
         trade_data = {
@@ -193,10 +197,10 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
     @patch(
         "hummingbot.connector.exchange.xrpl.xrpl_api_order_book_data_source.XRPLAPIOrderBookDataSource._request_order_book_snapshot"
     )
-    async def test_get_new_order_book_successful(self, request_order_book_mock):
+    def test_get_new_order_book_successful(self, request_order_book_mock):
         request_order_book_mock.return_value = self._snapshot_response()
 
-        order_book: OrderBook = await self.data_source.get_new_order_book(self.trading_pair)
+        order_book: OrderBook = self.async_run_with_timeout(self.data_source.get_new_order_book(self.trading_pair))
 
         bids = list(order_book.bid_entries())
         asks = list(order_book.ask_entries())
@@ -210,9 +214,9 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
     @patch(
         "hummingbot.connector.exchange.xrpl.xrpl_api_order_book_data_source.XRPLAPIOrderBookDataSource._request_order_book_snapshot"
     )
-    async def test_get_new_order_book_get_empty(self, request_order_book_mock):
+    def test_get_new_order_book_get_empty(self, request_order_book_mock):
         request_order_book_mock.return_value = {}
-        order_book: OrderBook = await self.data_source.get_new_order_book(self.trading_pair)
+        order_book: OrderBook = self.async_run_with_timeout(self.data_source.get_new_order_book(self.trading_pair))
 
         bids = list(order_book.bid_entries())
         asks = list(order_book.ask_entries())
@@ -222,24 +226,24 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
     @patch(
         "hummingbot.connector.exchange.xrpl.xrpl_api_order_book_data_source.XRPLAPIOrderBookDataSource.get_last_traded_prices"
     )
-    async def test_get_last_traded_prices(self, mock_get_last_traded_prices):
+    def test_get_last_traded_prices(self, mock_get_last_traded_prices):
         mock_get_last_traded_prices.return_value = {"SOLO-XRP": 0.5}
-        result = await self.data_source.get_last_traded_prices(["SOLO-XRP"])
+        result = self.async_run_with_timeout(self.data_source.get_last_traded_prices(["SOLO-XRP"]))
         self.assertEqual(result, {"SOLO-XRP": 0.5})
 
     @patch("xrpl.models.requests.BookOffers")
-    async def test_request_order_book_snapshot(self, mock_book_offers):
+    def test_request_order_book_snapshot(self, mock_book_offers):
         mock_book_offers.return_value.status = "success"
         mock_book_offers.return_value.result = {"offers": []}
 
-        self.data_source._xrpl_client.is_open = Mock(return_value=True)
+        self.data_source._xrpl_client.is_open.return_value = False
         self.data_source._xrpl_client.request.return_value = mock_book_offers.return_value
 
-        await self.data_source._request_order_book_snapshot("SOLO-XRP")
+        self.async_run_with_timeout(self.data_source._request_order_book_snapshot("SOLO-XRP"))
 
         assert self.data_source._xrpl_client.request.call_count == 2
 
-        order_book: OrderBook = await self.data_source.get_new_order_book(self.trading_pair)
+        order_book: OrderBook = self.async_run_with_timeout(self.data_source.get_new_order_book(self.trading_pair))
 
         bids = list(order_book.bid_entries())
         asks = list(order_book.ask_entries())
@@ -247,27 +251,26 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(0, len(asks))
 
     @patch("xrpl.models.requests.BookOffers")
-    async def test_request_order_book_snapshot_exception(self, mock_book_offers):
+    def test_request_order_book_snapshot_exception(self, mock_book_offers):
         mock_book_offers.return_value.status = "error"
         mock_book_offers.return_value.result = {"offers": []}
 
-        self.data_source._xrpl_client.is_open = Mock(return_value=True)
+        self.data_source._xrpl_client.is_open.return_value = False
         self.data_source._xrpl_client.request.return_value = mock_book_offers.return_value
 
         with self.assertRaises(Exception) as context:
-            await self.data_source._request_order_book_snapshot("SOLO-XRP")
+            self.async_run_with_timeout(self.data_source._request_order_book_snapshot("SOLO-XRP"))
 
         self.assertTrue("Error fetching order book snapshot" in str(context.exception))
 
-    async def test_fetch_order_book_side_exception(self):
+    def test_fetch_order_book_side_exception(self):
         self.data_source._xrpl_client.request.side_effect = TimeoutError
-        self.data_source._sleep = AsyncMock()
 
         with self.assertRaises(TimeoutError):
-            await self.data_source.fetch_order_book_side(self.data_source._xrpl_client, 12345, {}, {}, 50)
+            self.async_run_with_timeout(self.data_source.fetch_order_book_side(self.data_source._xrpl_client, 12345, {}, {}, 50))
 
     @patch("hummingbot.connector.exchange.xrpl.xrpl_api_order_book_data_source.XRPLAPIOrderBookDataSource._get_client")
-    async def test_process_websocket_messages_for_pair(self, mock_get_client):
+    def test_process_websocket_messages_for_pair(self, mock_get_client):
         mock_client = AsyncMock()
         mock_client.__aenter__.return_value = mock_client
         mock_client.__aexit__ = AsyncMock()
@@ -347,13 +350,13 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
 
         mock_get_client.return_value = mock_client
 
-        await self.data_source._process_websocket_messages_for_pair("SOLO-XRP")
+        self.async_run_with_timeout(self.data_source._process_websocket_messages_for_pair("SOLO-XRP"))
 
         mock_get_client.assert_called_once_with()
         mock_client.send.assert_called_once()
 
     @patch("hummingbot.connector.exchange.xrpl.xrpl_api_order_book_data_source.XRPLAPIOrderBookDataSource._get_client")
-    async def test_process_websocket_messages_for_pair_exception(self, mock_get_client):
+    def test_process_websocket_messages_for_pair_exception(self, mock_get_client):
         mock_client = AsyncMock()
         mock_client.__aenter__.return_value = mock_client
         mock_client.__aexit__ = None
@@ -362,4 +365,4 @@ class XRPLAPIOrderBookDataSourceUnitTests(IsolatedAsyncioWrapperTestCase):
         mock_get_client.return_value = mock_client
 
         with self.assertRaises(Exception):
-            await self.data_source._process_websocket_messages_for_pair("SOLO-XRP")
+            self.async_run_with_timeout(self.data_source._process_websocket_messages_for_pair("SOLO-XRP"))

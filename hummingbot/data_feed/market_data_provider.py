@@ -30,9 +30,7 @@ class MarketDataProvider:
             cls._logger = logging.getLogger(__name__)
         return cls._logger
 
-    def __init__(self,
-                 connectors: Dict[str, ConnectorBase],
-                 rates_update_interval: int = 60):
+    def __init__(self, connectors: Dict[str, ConnectorBase], rates_update_interval: int = 60):
         self.candles_feeds = {}  # Stores instances of candle feeds
         self.connectors = connectors  # Stores instances of connectors
         self._rates_update_task = None
@@ -40,6 +38,7 @@ class MarketDataProvider:
         self._rates = {}
         self._rate_sources = {}
         self._rates_required = {}
+        self.gateway_client = GatewayHttpClient.get_instance()
         self.conn_settings = AllConnectorSettings.get_connector_settings()
 
     def stop(self):
@@ -89,12 +88,11 @@ class MarketDataProvider:
             for connector, connector_pairs in self._rates_required.items():
                 if connector == "gateway":
                     tasks = []
-                    gateway_client = GatewayHttpClient.get_instance()
                     for connector_pair in connector_pairs:
                         connector, chain, network = connector_pair.connector_name.split("_")
                         base, quote = connector_pair.trading_pair.split("-")
                         tasks.append(
-                            gateway_client.get_price(
+                            self.gateway_client.get_price(
                                 chain=chain, network=network, connector=connector,
                                 base_asset=base, quote_asset=quote, amount=Decimal("1"),
                                 side=TradeType.BUY))
@@ -197,10 +195,6 @@ class MarketDataProvider:
         connector_class = get_connector_class(connector_name)
         connector = connector_class(**init_params)
         return connector
-
-    def get_balance(self, connector_name: str, asset: str):
-        connector = self.get_connector(connector_name)
-        return connector.get_balance(asset)
 
     def get_order_book(self, connector_name: str, trading_pair: str):
         """

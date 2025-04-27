@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
+import unittest
 from typing import Awaitable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,12 +20,13 @@ from hummingbot.connector.test_support.network_mocking_assistant import NetworkM
 from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
 
 
-class KrakenAPIUserStreamDataSourceTest(IsolatedAsyncioWrapperTestCase):
+class KrakenAPIUserStreamDataSourceTest(unittest.TestCase):
     level = 0
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
         cls.base_asset = "COINALPHA"
         cls.quote_asset = "HBOT"
         cls.trading_pair = f"{cls.base_asset}-{cls.quote_asset}"
@@ -37,13 +38,10 @@ class KrakenAPIUserStreamDataSourceTest(IsolatedAsyncioWrapperTestCase):
         super().setUp()
         self.log_records = []
         self.listening_task: Optional[asyncio.Task] = None
-
-        self.mock_time_provider = MagicMock()
-
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
         self.mocking_assistant = NetworkMockingAssistant()
+
         self.throttler = AsyncThrottler(build_rate_limits_by_tier(self.api_tier))
+        self.mock_time_provider = MagicMock()
 
         client_config_map = ClientConfigAdapter(ClientConfigMap())
         self.connector = KrakenExchange(
@@ -144,32 +142,32 @@ class KrakenAPIUserStreamDataSourceTest(IsolatedAsyncioWrapperTestCase):
         return own_trades
 
     @aioresponses()
-    async def test_get_auth_token(self, mocked_api):
+    def test_get_auth_token(self, mocked_api):
         url = f"{CONSTANTS.BASE_URL}{CONSTANTS.GET_TOKEN_PATH_URL}"
         regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?"))
         resp = self.get_auth_response_mock()
         mocked_api.post(regex_url, body=json.dumps(resp))
 
-        ret = await (self.data_source.get_auth_token())
+        ret = self.async_run_with_timeout(self.data_source.get_auth_token())
 
         self.assertEqual(ret, resp["result"]["token"])
 
     @aioresponses()
     @patch("aiohttp.ClientSession.ws_connect", new_callable=AsyncMock)
-    async def test_listen_for_user_stream(self, mocked_api, ws_connect_mock):
+    def test_listen_for_user_stream(self, mocked_api, ws_connect_mock):
         url = f"{CONSTANTS.BASE_URL}{CONSTANTS.GET_TOKEN_PATH_URL}"
         regex_url = re.compile(f"^{url}".replace(".", r"\.").replace("?", r"\?"))
         resp = self.get_auth_response_mock()
         mocked_api.post(regex_url, body=json.dumps(resp))
         ws_connect_mock.return_value = self.mocking_assistant.create_websocket_mock()
         output_queue = asyncio.Queue()
-        asyncio.create_task(self.data_source.listen_for_user_stream(output_queue))
+        self.ev_loop.create_task(self.data_source.listen_for_user_stream(output_queue))
 
         resp = self.get_open_orders_mock()
         self.mocking_assistant.add_websocket_aiohttp_message(
             websocket_mock=ws_connect_mock.return_value, message=json.dumps(resp)
         )
-        ret = await output_queue.get()
+        ret = self.async_run_with_timeout(coroutine=output_queue.get())
 
         self.assertEqual(ret, resp)
 
@@ -177,6 +175,6 @@ class KrakenAPIUserStreamDataSourceTest(IsolatedAsyncioWrapperTestCase):
         self.mocking_assistant.add_websocket_aiohttp_message(
             websocket_mock=ws_connect_mock.return_value, message=json.dumps(resp)
         )
-        ret = await (output_queue.get())
+        ret = self.async_run_with_timeout(coroutine=output_queue.get())
 
         self.assertEqual(ret, resp)

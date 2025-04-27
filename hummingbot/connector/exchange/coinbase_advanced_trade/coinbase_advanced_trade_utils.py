@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
-from pydantic import ConfigDict, Field, SecretStr
+from pydantic import Field, SecretStr
 
 import hummingbot.connector.exchange.coinbase_advanced_trade.coinbase_advanced_trade_constants as constants
-from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
+from hummingbot.client.config.config_data_types import BaseConnectorConfigMap, ClientFieldData
 from hummingbot.core.data_type.trade_fee import TradeFeeSchema
 from hummingbot.core.web_assistant.connections.data_types import EndpointRESTRequest
 
@@ -34,26 +34,28 @@ class CoinbaseAdvancedTradeRESTRequest(EndpointRESTRequest):
 
 
 class CoinbaseAdvancedTradeConfigMap(BaseConnectorConfigMap):
-    connector: str = "coinbase_advanced_trade"
+    connector: str = Field(default="coinbase_advanced_trade", const=True, client_data=None)
     coinbase_advanced_trade_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Coinbase Advanced Trade API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Coinbase Advanced Trade API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
     coinbase_advanced_trade_api_secret: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your Coinbase Advanced Trade API secret",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your Coinbase Advanced Trade API secret",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        )
     )
-    model_config = ConfigDict(title="coinbase_advanced_trade")
+
+    class Config:
+        title = "coinbase_advanced_trade"
 
 
-KEYS = CoinbaseAdvancedTradeConfigMap.model_construct()
+KEYS = CoinbaseAdvancedTradeConfigMap.construct()

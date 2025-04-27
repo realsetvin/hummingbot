@@ -1,5 +1,8 @@
-from typing import List, Tuple
+from typing import List, Tuple, cast
 
+from hummingbot.client.settings import AllConnectorSettings
+from hummingbot.connector.gateway.amm.gateway_evm_amm import GatewayEVMAMM
+from hummingbot.connector.gateway.gateway_price_shim import GatewayPriceShim
 from hummingbot.strategy.cross_exchange_market_making.cross_exchange_market_making import (
     CrossExchangeMarketMakingStrategy,
     LogOption,
@@ -15,6 +18,7 @@ def start(self):
     raw_maker_trading_pair = c_map.maker_market_trading_pair
     raw_taker_trading_pair = c_map.taker_market_trading_pair
     status_report_interval = self.client_config_map.strategy_report_interval
+    debug_price_shim = c_map.debug_price_shim
 
     try:
         maker_trading_pair: str = raw_maker_trading_pair
@@ -37,6 +41,18 @@ def start(self):
     taker_market_trading_pair_tuple = MarketTradingPairTuple(*taker_data)
     self.market_trading_pair_tuples = [maker_market_trading_pair_tuple, taker_market_trading_pair_tuple]
     self.market_pair = MakerTakerMarketPair(maker=maker_market_trading_pair_tuple, taker=taker_market_trading_pair_tuple)
+
+    if taker_market in AllConnectorSettings.get_gateway_amm_connector_names():
+        if debug_price_shim:
+            amm_connector: GatewayEVMAMM = cast(GatewayEVMAMM, self.market_pair.taker.market)
+            GatewayPriceShim.get_instance().patch_prices(
+                maker_market,
+                maker_trading_pair,
+                amm_connector.connector_name,
+                amm_connector.chain,
+                amm_connector.network,
+                taker_trading_pair
+            )
 
     strategy_logging_options = (
         LogOption.CREATE_ORDER,

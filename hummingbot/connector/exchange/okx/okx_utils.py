@@ -1,9 +1,9 @@
 from decimal import Decimal
-from typing import Any, Dict, Literal
+from typing import Any, Dict
 
 from pydantic import Field, SecretStr
 
-from hummingbot.client.config.config_data_types import BaseConnectorConfigMap
+from hummingbot.client.config.config_data_types import BaseConnectorConfigMap, ClientFieldData
 from hummingbot.core.data_type.trade_fee import TradeFeeSchema
 
 DEFAULT_FEES = TradeFeeSchema(
@@ -17,45 +17,37 @@ EXAMPLE_PAIR = "BTC-USDT"
 
 
 class OKXConfigMap(BaseConnectorConfigMap):
-    connector: str = "okx"
+    connector: str = Field(default="okx", const=True, client_data=None)
     okx_api_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your OKX API key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your OKX API key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
     okx_secret_key: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your OKX secret key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your OKX secret key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
     okx_passphrase: SecretStr = Field(
         default=...,
-        json_schema_extra={
-            "prompt": "Enter your OKX passphrase key",
-            "is_secure": True,
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
-    )
-    okx_registration_sub_domain: Literal["www", "app", "my"] = Field(
-        default="www",
-        json_schema_extra={
-            "prompt": "Which OKX subdomain did you register the key at? (www/app/my) - Generally www for most users, app for US users, my for EEA users.",
-            "is_connect_key": True,
-            "prompt_on_new": True,
-        }
+        client_data=ClientFieldData(
+            prompt=lambda cm: "Enter your OKX passphrase key",
+            is_secure=True,
+            is_connect_key=True,
+            prompt_on_new=True,
+        ),
     )
 
 
-KEYS = OKXConfigMap.model_construct()
+KEYS = OKXConfigMap.construct()
 
 
 def is_exchange_information_valid(exchange_info: Dict[str, Any]) -> bool:

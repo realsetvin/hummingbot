@@ -2,7 +2,6 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from hummingbot.connector.time_synchronizer import TimeSynchronizer
-from hummingbot.connector.utils import to_0x_hex
 from hummingbot.core.web_assistant.auth import AuthBase
 from hummingbot.core.web_assistant.connections.data_types import RESTRequest, WSRequest
 
@@ -12,7 +11,7 @@ class DexalotAuth(AuthBase):
         self.api_key = api_key
         self.secret_key = secret_key
         self.time_provider = time_provider
-        self.wallet = Account.from_key(secret_key) if secret_key else None
+        self.wallet = Account.from_key(secret_key)
 
     async def rest_authenticate(self, request: RESTRequest) -> RESTRequest:
         """
@@ -22,9 +21,8 @@ class DexalotAuth(AuthBase):
         """
 
         message = encode_defunct(text="dexalot")
-        signed_message = to_0x_hex(self.wallet.sign_message(signable_message=message).signature)
-
-        headers = {"x-signature": f"{self.wallet.address}:{signed_message}"}
+        signed_message = self.wallet.sign_message(signable_message=message)
+        headers = {"x-signature": f"{self.wallet.address}:{signed_message.signature.hex()}"}
         if request.headers is not None:
             headers.update(request.headers)
         request.headers = headers
@@ -37,6 +35,6 @@ class DexalotAuth(AuthBase):
         functionality
         """
         message = encode_defunct(text="dexalot")
-        signed_message = to_0x_hex(self.wallet.sign_message(signable_message=message).signature)
-        request.payload["signature"] = f"{self.wallet.address}:{signed_message}"
+        signed_message = self.wallet.sign_message(signable_message=message)
+        request.payload["signature"] = f"{self.wallet.address}:{signed_message.signature.hex()}"
         return request

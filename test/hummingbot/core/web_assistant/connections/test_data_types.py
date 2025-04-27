@@ -1,6 +1,7 @@
+import asyncio
 import json
 import unittest
-from test.isolated_asyncio_wrapper_test_case import IsolatedAsyncioWrapperTestCase
+from typing import Awaitable
 
 import aiohttp
 from aioresponses import aioresponses
@@ -8,10 +9,15 @@ from aioresponses import aioresponses
 from hummingbot.core.web_assistant.connections.data_types import EndpointRESTRequest, RESTMethod, RESTResponse
 
 
-class DataTypesTest(IsolatedAsyncioWrapperTestCase):
+class DataTypesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        cls.ev_loop = asyncio.get_event_loop()
+
+    def async_run_with_timeout(self, coroutine: Awaitable, timeout: int = 1):
+        ret = self.ev_loop.run_until_complete(asyncio.wait_for(coroutine, timeout))
+        return ret
 
     def test_rest_method_to_str(self):
         method = RESTMethod.GET
@@ -20,14 +26,13 @@ class DataTypesTest(IsolatedAsyncioWrapperTestCase):
         self.assertEqual("GET", method_str)
 
     @aioresponses()
-    async def test_rest_response_properties(self, mocked_api):
+    def test_rest_response_properties(self, mocked_api):
         url = "https://some.url"
         body = {"one": 1}
         body_str = json.dumps(body)
         headers = {"content-type": "application/json"}
         mocked_api.get(url=url, body=body_str, headers=headers)
-        aiohttp_client_session = aiohttp.ClientSession()
-        aiohttp_response = await (aiohttp_client_session.get(url))
+        aiohttp_response = self.async_run_with_timeout(aiohttp.ClientSession(loop=self.ev_loop).get(url))
 
         response = RESTResponse(aiohttp_response)
 
@@ -36,47 +41,22 @@ class DataTypesTest(IsolatedAsyncioWrapperTestCase):
         self.assertEqual(200, response.status)
         self.assertEqual(headers, response.headers)
 
-        json_ = await (response.json())
+        json_ = self.async_run_with_timeout(response.json())
 
         self.assertEqual(body, json_)
 
-        text = await (response.text())
+        text = self.async_run_with_timeout(response.text())
 
         self.assertEqual(body_str, text)
-        await (aiohttp_client_session.close())
 
     @aioresponses()
-    async def test_rest_response_with_test_properties(self, mocked_api):
-        url = "https://some.url"
-        data = '{"one": 1}'
-        data_str = data.encode("utf-8")
-        body = f'{data_str}'
-        body_str = json.dumps(body)
-        headers = {"content-type": "text/html"}
-        mocked_api.get(url=url, body=body_str, headers=headers)
-        aiohttp_client_session = aiohttp.ClientSession()
-        aiohttp_response = await (aiohttp_client_session.get(url))
-
-        response = RESTResponse(aiohttp_response)
-
-        self.assertEqual(url, response.url)
-        self.assertEqual(RESTMethod.GET, response.method)
-        self.assertEqual(200, response.status)
-        self.assertEqual(headers, response.headers)
-
-        json_ = await (response.json())
-
-        self.assertEqual(body, json_)
-
-    @aioresponses()
-    async def test_rest_response_repr(self, mocked_api):
+    def test_rest_response_repr(self, mocked_api):
         url = "https://some.url"
         body = {"one": 1}
         body_str = json.dumps(body)
         headers = {"content-type": "application/json"}
         mocked_api.get(url=url, body=body_str, headers=headers)
-        aiohttp_client_session = aiohttp.ClientSession()
-        aiohttp_response = await (aiohttp_client_session.get(url))
+        aiohttp_response = self.async_run_with_timeout(aiohttp.ClientSession(loop=self.ev_loop).get(url))
 
         response = RESTResponse(aiohttp_response)
 
@@ -86,7 +66,6 @@ class DataTypesTest(IsolatedAsyncioWrapperTestCase):
         actual = str(response)
 
         self.assertEqual(expected, actual)
-        await (aiohttp_client_session.close())
 
 
 class EndpointRESTRequestDummy(EndpointRESTRequest):
